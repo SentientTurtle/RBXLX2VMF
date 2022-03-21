@@ -1,20 +1,27 @@
 #![allow(non_snake_case)]
 #![feature(try_blocks)]
 #![feature(option_result_contains)]
-#![feature(array_map)]
 
+use std::collections::HashMap;
 use clap::{App, Arg};
 use std::fs::{File, Metadata};
 use std::io::{Read, Write};
-use crate::rbx::{Model, Part, CFrame, Vector3, BoundingBox, Material, Color3, PartType};
+use crate::rbx::{Part, CFrame, Vector3, BoundingBox, Material, Color3, PartType, PartShape};
 use roxmltree::{Document, Node};
-use crate::vmf::{VMFBuilder, Solid, Side, TextureFace, TextureMap, VMFTexture};
+use crate::vmf::{VMFBuilder, Solid, Side, TextureFace, TextureMap, VMFTexture, Displacement};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
-use image::{EncodableLayout, GenericImageView, ColorType, ImageFormat};
+use flate2::read::GzDecoder;
+use image::{EncodableLayout, GenericImageView, ColorType, ImageFormat, DynamicImage, ImageBuffer, Rgba};
+use image::imageops::FilterType;
 
 mod rbx;
 mod vmf;
+
+const MAX_PART_COUNT: usize = 32768;
+const ID_BLOCK_SIZE: u32 = 35000;
+const ROBLOX_DECAL_MAX_WIDTH: u32 = 1024;
+const ROBLOX_DECAL_MAX_HEIGHT: u32 = 1024;
 
 fn main() {
     let matches = App::new("RBXLX2VMF")
@@ -29,11 +36,10 @@ fn main() {
             .required(true))
         .arg(Arg::with_name("texture-input")
             .long("texture-input")
-            .short("ti")
             .value_name("FOLDER")
             .help("Sets texture input folder")
             .takes_value(true)
-            .required(true))
+            .default_value("./textures"))
         .arg(Arg::with_name("output")
             .long("output")
             .short("o")
@@ -43,14 +49,21 @@ fn main() {
             .takes_value(true))
         .arg(Arg::with_name("texture-output")
             .long("texture-output")
-            .short("to")
             .value_name("FOLDER")
             .help("Sets texture output folder")
             .default_value("./textures-out")
             .takes_value(true))
+        .arg(Arg::with_name("no-textures")
+            .long("no-textures")
+            .help("disables texture generation")
+            .takes_value(false))
         .arg(Arg::with_name("auto-skybox")
             .long("auto-skybox")
             .help("enables automatic skybox (Warning: Results in highly unoptimized map)")
+            .takes_value(false))
+        .arg(Arg::with_name("optimize")
+            .long("optimize")
+            .help("enables part-count reduction by joining adjacent parts")
             .takes_value(false))
         .arg(Arg::with_name("skybox-height")
             .long("skybox-height")
@@ -68,8 +81,10 @@ fn main() {
     let output = matches.value_of_os("output").unwrap();
     let texture_input = matches.value_of_os("texture-input").unwrap();
     let texture_output = matches.value_of_os("texture-output").unwrap();
+    let texture_export_enabled = !matches.is_present("no-textures");
 
     let auto_skybox_enabled = matches.is_present("auto-skybox");
+    let part_optimization_enabled = matches.is_present("optimize");
     let map_scale: f64 = match matches.value_of("map-scale").unwrap().parse() {
         Ok(f) => f,
         Err(_) => {
@@ -81,7 +96,9 @@ fn main() {
 
     println!("Converting {} to {}", input.to_string_lossy(), output.to_string_lossy());
     println!("Using map scale: {}×", map_scale);
-    println!("Auto-skybox [{}]\n", if auto_skybox_enabled { "ENABLED" } else { "DISABLED" });
+    println!("Auto-skybox [{}]", if auto_skybox_enabled { "ENABLED" } else { "DISABLED" });
+    println!("Part-count optimization [{}]", if part_optimization_enabled { "ENABLED" } else { "DISABLED" });
+    println!();
 
     let mut input = match File::open(input) {
         Ok(file) => file,
@@ -98,7 +115,7 @@ fn main() {
         }
     };
 
-    print!("Reading input... ");    // We need to flush print! manually, as it is usually line-buffered.
+    print!("Reading input...    ");    // We need to flush print! manually, as it is usually line-buffered.
     std::io::stdout().flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
     let mut buffer = String::with_capacity(input.metadata().as_ref().map(Metadata::len).unwrap_or(0) as usize);
     match input.read_to_string(&mut buffer) {
@@ -109,31 +126,45 @@ fn main() {
         }
     }
 
-    print!("Parsing XML...   ");
-    std::io::stdout().flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
+    print!("Parsing XML...      ");
+    std::io::stdout().flush().unwrap_or_default();
     match Document::parse(buffer.as_str()) {
         Ok(document) => {
             let mut parts = Vec::new();
-            let mut models = Vec::new();
-            parse_xml(document.root_element(), &mut parts, &mut models, false);
+            parse_xml(document.root_element(), &mut parts, false);
+            println!("{} parts found!", parts.len());
+
+            if part_optimization_enabled {
+                print!("Optimizing...       ");
+                std::io::stdout().flush().unwrap_or_default();
+                let old_count = parts.len();
+                parts = Part::join_adjacent(parts, true);
+                println!("\nReduced part count to {} (-{})", parts.len(), old_count - parts.len());
+            }
+
+            if parts.len() > MAX_PART_COUNT {
+                println!("error: Too many parts, found: {} parts, must be fewer than {}", parts.len(), MAX_PART_COUNT + 1);
+                std::process::exit(-1)
+            }
+
+            // Hack: Source engine does not support surface-displacement on detail
+            parts.iter_mut().for_each(|part| if part.shape != PartShape::Block { part.is_detail = false });
 
             let result: std::io::Result<()> = try {
-                let mut part_id = 35000 * 0;    // At most 32768 faces may exist in a VMF map, so ID blocks are sized according
-                let mut side_id = 35000 * 1;
-                let mut entity_id = 35000 * 2;
+                let mut part_id = ID_BLOCK_SIZE * 0;    // IDs split into blocks to avoid overlap
+                let mut side_id = ID_BLOCK_SIZE * 1;
+                let mut entity_id = ID_BLOCK_SIZE * 2;
 
                 let mut bounding_box = parts.iter()
-                    .chain(models.iter().flat_map(<&Model>::into_iter).map(|(part, _)| part))
                     .copied()
                     .fold(BoundingBox::zeros(), BoundingBox::include);
 
                 let mut texture_map = TextureMap::new();
 
-                println!("{} parts found!", bounding_box.part_count);
-                print!("Writing VMF...   ");
-                std::io::stdout().flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
+                print!("Writing VMF...      ");
+                std::io::stdout().flush().unwrap_or_default();
 
-                let mut world_solids = Vec::with_capacity(bounding_box.part_count as usize);
+                let mut world_solids = Vec::with_capacity(parts.len());
                 let mut detail_solids = Vec::new();
 
                 parts.iter()
@@ -149,43 +180,7 @@ fn main() {
                     })
                     .for_each(|s| world_solids.push(s));
 
-                models.iter()
-                    .flat_map(<&Model>::into_iter)
-                    .map(|(part, _)| part)
-                    .filter(|part| !part.is_detail)
-                    .map(|part| {
-                        Solid {
-                            id: {
-                                part_id += 1;
-                                part_id
-                            },
-                            sides: decompose_part(*part, &mut side_id, map_scale, &mut texture_map),
-                        }
-                    })
-                    .for_each(|s| world_solids.push(s));
-
                 parts.iter()
-                    .filter(|part| part.is_detail)
-                    .map(|part| {
-                        (
-                            {
-                                entity_id += 1;
-                                entity_id
-                            },
-                            Solid {
-                                id: {
-                                    part_id += 1;
-                                    part_id
-                                },
-                                sides: decompose_part(*part, &mut side_id, map_scale, &mut texture_map),
-                            }
-                        )
-                    })
-                    .for_each(|s| detail_solids.push(s));
-
-                models.iter()
-                    .flat_map(<&Model>::into_iter)
-                    .map(|(part, _)| part)
                     .filter(|part| part.is_detail)
                     .map(|part| {
                         (
@@ -218,70 +213,103 @@ fn main() {
                     .flush()?;
                 println!("DONE");
 
+                if texture_export_enabled {
+                    print!("Writing textures...\n");
+                    std::io::stdout().flush().unwrap_or_default();
 
-                print!("Writing textures...\n");
-                std::io::stdout().flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
+                    let texture_input_folder = Path::new(texture_input);
+                    let texture_output_folder = Path::new(texture_output);
+                    if let Err(error) = std::fs::create_dir_all(texture_output_folder) {
+                        println!("error: could not create texture output directory {}", error);
+                        std::process::exit(-1)
+                    }
+                    for texture in texture_map.into_iter().filter(RobloxTexture::must_generate) {
+                        let image = if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
+                            print!("\tdecal: {}...", id);
+                            std::io::stdout().flush().unwrap_or_default();
 
-                let texture_input_folder = Path::new(texture_input);
-                let texture_output_folder = Path::new(texture_output);
-                if let Err(error) = std::fs::create_dir_all(texture_output_folder) {
-                    println!("error: could not create texture output directory {}", error);
-                    std::process::exit(-1)
-                }
-                for texture in texture_map.iter().filter(|t| if let Material::Custom { generate, .. } = t.material { generate } else { true }) {
-                    let path = texture_input_folder.join(texture.material.texture()).with_extension("png");
-                    print!("\ttexture:{}...", texture);
-                    std::io::stdout().flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
-                    match image::io::Reader::open(path) {
-                        Ok(image_reader) => {
-                            match image_reader.decode() {
-                                Ok(image) => {
-                                    let width = image.width();
-                                    let height = image.height();
-                                    let rgba_image = image.into_rgba8();    // Optimization hack: We're guesstimating the images are RGBA
-                                    let input_buf = rgba_image.as_bytes();
+                            let result: Result<DynamicImage, String> = try {
+                                let response = reqwest::blocking::get(format!("https://assetdelivery.roblox.com/v1/assetId/{}", id))
+                                    .map_err(|err| format!("{}", err))?
+                                    .json::<HashMap<String, serde_json::Value>>()
+                                    .map_err(|err| format!("{}", err))?;
+                                let location = response.get("location")
+                                    .and_then(|value| value.as_str())
+                                    .ok_or("No location specified!".to_string())?;
+
+                                let bytes = reqwest::blocking::get(location)
+                                    .map_err(|err| format!("{}", err))?
+                                    .bytes()
+                                    .map_err(|err| format!("{}", err))?;
+
+                                let mut buffer = Vec::with_capacity(bytes.len());   // reqwest supports automatic deflating, but that does not function reliably with the roblox api
+                                let bytes = match GzDecoder::new(bytes.as_bytes()).read_to_end(&mut buffer) {
+                                    Ok(_) => &buffer[..],
+                                    Err(_) => bytes.as_bytes(),
+                                };
+
+                                let image = image::load_from_memory_with_format(bytes.as_bytes(), ImageFormat::Png)
+                                    .or_else(|_| image::load_from_memory_with_format(bytes.as_bytes(), ImageFormat::Jpeg))
+                                    .map_err(|err| {
+                                        File::create(format!("./{}-Error.png", id)).unwrap().write_all(bytes.as_bytes()).unwrap();
+                                        format!("{}", err)
+                                    })?;
+
+                                // Resize image; Source engine only supports power-of-two sized images. Decals are also assumed to have a fixed height
+                                let image = image.resize_exact(ROBLOX_DECAL_MAX_WIDTH, ROBLOX_DECAL_MAX_HEIGHT, FilterType::Lanczos3);
+
+                                let mut buf = ImageBuffer::from_pixel(image.width(), image.height(), Rgba([texture.color.red, texture.color.green, texture.color.blue, texture.transparency]));
+
+                                image::imageops::overlay(&mut buf, &image, 0, 0);
+
+                                DynamicImage::ImageRgba8(buf)
+                            };
+                            match result {
+                                Ok(image) => Some(image),
+                                Err(error) => {
+                                    println!("error loading decal: {}", error);
+                                    None
+                                }
+                            }
+                        } else {
+                            let path = texture_input_folder.join(format!("{}", texture.material)).with_extension("png");
+                            print!("\ttexture: {}...", texture);
+                            std::io::stdout().flush().unwrap_or_default();
+
+                            match image::io::Reader::open(path) {
+                                Ok(image_reader) => {
+                                    match image_reader.decode() {
+                                        Ok(image) => {
+                                            let width = image.width();
+                                            let height = image.height();
+                                            let rgba_image = image.into_rgba8();    // Optimization hack: We're guesstimating the images are RGBA
+                                            let input_buf = rgba_image.as_bytes();
 
 
-                                    let mut output_buf = Vec::with_capacity((width * height * 3) as usize);
-                                    for index in 0..(input_buf.len() / 4) {
-                                        let red = input_buf[index * 4 + 0];
-                                        let green = input_buf[index * 4 + 1];
-                                        let blue = input_buf[index * 4 + 2];
+                                            let mut output_buf = Vec::with_capacity((width * height * 4) as usize);
+                                            for index in 0..(input_buf.len() / 4) {
+                                                //Note: Material textures are applied as a mask, so direct channel multiplication is used rather than alpha compositing
+                                                let red = input_buf[index * 4 + 0];
+                                                let green = input_buf[index * 4 + 1];
+                                                let blue = input_buf[index * 4 + 2];
+                                                let alpha = input_buf[index * 4 + 3];
 
-                                        let out_red = (texture.color.red as u64 * red as u64 / 255) as u8;
-                                        let out_green = (texture.color.green as u64 * green as u64 / 255) as u8;
-                                        let out_blue = (texture.color.blue as u64 * blue as u64 / 255) as u8;
+                                                let out_red = (texture.color.red as u64 * red as u64 / 255) as u8;
+                                                let out_green = (texture.color.green as u64 * green as u64 / 255) as u8;
+                                                let out_blue = (texture.color.blue as u64 * blue as u64 / 255) as u8;
+                                                let out_alpha = (texture.transparency as u64 * alpha as u64 / 255) as u8;
 
-                                        output_buf.push(out_red);
-                                        output_buf.push(out_green);
-                                        output_buf.push(out_blue);
-                                    }
-
-                                    let image_out_path = texture_output_folder.join(format!("{}_{}-{}-{}", texture.material.texture(), texture.color.red, texture.color.blue, texture.color.green))
-                                        .with_extension("png");
-                                    let vmt_out_path = texture_output_folder.join(format!("{}_{}-{}-{}", texture.material.texture(), texture.color.red, texture.color.blue, texture.color.green))
-                                        .with_extension("vmt");
-
-                                    match image::save_buffer_with_format(image_out_path, &*output_buf, width, height, ColorType::Rgb8, ImageFormat::Png) {
-                                        Ok(_) => {
-                                            println!(" SAVED")
+                                                output_buf.push(out_red);
+                                                output_buf.push(out_green);
+                                                output_buf.push(out_blue);
+                                                output_buf.push(out_alpha);
+                                            }
+                                            Some(DynamicImage::ImageRgba8(ImageBuffer::from_vec(width, height, output_buf).unwrap()))
                                         }
                                         Err(error) => {
-                                            println!("error: could not write texture file {}", error);
+                                            println!("error: could not read texture file {}", error);
                                             std::process::exit(-1)
                                         }
-                                    }
-
-                                    if let Err(error) = File::create(vmt_out_path).and_then(|mut file| {
-                                        write!(file,
-                                               "\"LightmappedGeneric\"\n\
-                                                {{\n\
-                                                \"$basetexture\" \"{}\"\n\
-                                                }}\n",
-                                               texture
-                                        )
-                                    }) {
-                                        println!("\t\twarning: could not write VMT: {}", error);
                                     }
                                 }
                                 Err(error) => {
@@ -289,19 +317,55 @@ fn main() {
                                     std::process::exit(-1)
                                 }
                             }
+                        };
+                        if let Some(image) = image {
+                            let image_out_path = texture_output_folder.join(format!("{}_{}-{}-{}-{}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency))
+                                .with_extension("png");
+                            let vmt_out_path = texture_output_folder.join(format!("{}_{}-{}-{}-{}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency))
+                                .with_extension("vmt");
+
+                            let width = image.width();
+                            let height = image.height();
+
+                            match image::save_buffer_with_format(image_out_path, image.into_rgba8().as_bytes(), width, height, ColorType::Rgba8, ImageFormat::Png) {
+                                Ok(_) => println!(" SAVED"),
+                                Err(error) => {
+                                    println!("error: could not write texture file {}", error);
+                                    std::process::exit(-1)
+                                }
+                            }
+
+                            if let Err(error) = File::create(vmt_out_path).and_then(|mut file| {
+                                if texture.transparency != 255 {
+                                    write!(file,
+                                           "\"LightmappedGeneric\"\n\
+                                                {{\n\
+                                                \"$basetexture\" \"{}\"\n\
+                                                \"$translucent\" \"1\"\n\
+                                                }}\n",
+                                           texture
+                                    )
+                                } else {
+                                    write!(file,
+                                           "\"LightmappedGeneric\"\n\
+                                                {{\n\
+                                                \"$basetexture\" \"{}\"\n\
+                                                }}\n",
+                                           texture
+                                    )
+                                }
+                            }) {
+                                println!("\t\twarning: could not write VMT: {}", error);
+                            }
                         }
-                        Err(error) => {
-                            println!("error: could not read texture file {}", error);
-                            std::process::exit(-1)
-                        }
-                    };
+                    }
                 }
             };
             if let Err(error) = result {
                 println!("error: could not write VMF {}", error);
                 std::process::exit(-1)
             }
-        }
+        },
         Err(error) => {
             println!("error: invalid XML {}", error);
             std::process::exit(-1)
@@ -341,7 +405,7 @@ impl<'a, 'input> NodeExtensions<'a> for Node<'a, 'input> {
 
 /// Recursively parses XML
 /// Expects machine-generated RBXLX files as input, and skips any malformed items.
-fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec<Model<'a>>, is_detail: bool) {
+fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: bool) {
     match node.attribute("class") {
         Some(class @ "Part") | Some(class @ "SpawnLocation") | Some(class @ "TrussPart") => {
             let option: Option<()> = try {
@@ -358,12 +422,27 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
                         .ok()?
                 );
 
+                let transparency = properties.get_child_with_attribute("float", "name", "Transparency")?
+                    .text()?
+                    .parse::<f64>()
+                    .ok()?;
+
                 let material = Material::from_id(
                     properties.get_child_with_attribute("token", "name", "Material")?
                         .text()?
                         .parse::<u32>()
                         .ok()?
                 )?;
+
+                let shape = match properties.get_child_with_attribute("token", "name", "shape")?
+                    .text()?
+                    .parse::<u32>()
+                    .ok()?
+                {
+                    0 => PartShape::Sphere,
+                    2 => PartShape::Cylinder,
+                    1 | _ => PartShape::Block,  // Default to block
+                };
 
                 const DECAL_FRONT: usize = 5;
                 const DECAL_BACK: usize = 2;
@@ -377,8 +456,8 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
                 fn decal_for_side(properties: Node, decals: &mut [Option<Material>; 6], side_name: &str, side_enum: usize) {
                     if let Some(surface) = properties.get_child_with_attribute("token", "name", side_name).and_then(|node| node.text()) {
                         let decal = match surface.parse() {
-                            Ok(3u8) => Some(Material::Custom { texture: "studs", generate: true }),    // Studs,
-                            Ok(4u8) => Some(Material::Custom { texture: "inlet", generate: true }),    // Inlet,
+                            Ok(3u8) => Some(Material::Custom { texture: "studs", fill: false, generate: true, size_x: 32.0, size_y: 32.0 }),    // Studs,    TODO: other surfaces
+                            Ok(4u8) => Some(Material::Custom { texture: "inlet", fill: false, generate: true, size_x: 32.0, size_y: 32.0 }),    // Inlet,
                             _ => None
                         };
                         decals[side_enum] = decal;
@@ -394,18 +473,55 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
                 node.children()
                     .filter(|child_node| child_node.tag_name().name() == "Item" && child_node.attribute("class").contains(&"Decal"))
                     .filter_map(|child_node| child_node.get_child_with_name("Properties"))
-                    .filter_map(|properties| properties.get_child_with_attribute("token", "name", "Face"))
-                    .filter_map(|node| node.text())
-                    .filter_map(|text| text.parse::<u8>().ok())
-                    .for_each(|side| {
-                        if side < 6 {
-                            // We could probably retrieve the actual decal through https://assetdelivery.roblox.com/docs#!/AssetFetch/get_v1_assetId_assetId
-                            decals[side as usize] = Some(Material::Custom { texture: "decal", generate: true })
+                    .filter_map(|properties| {
+                        if let (Some(face), Some(texture)) = (
+                            properties.get_child_with_attribute("token", "name", "Face").as_ref().and_then(Node::text).and_then(|text| text.parse::<u8>().ok()),
+                            properties.get_child_with_attribute("Content", "name", "Texture").and_then(|node| node.get_child_with_name("url")).as_ref().and_then(Node::text)
+                        ) {
+                            Some((face, texture))
+                        } else {
+                            None
+                        }
+                    })
+                    .for_each(|(face, texture)| {
+                        if face < 6 {
+                            if let Some(id) = texture.split_once("?id=").and_then(|(_, id)| id.parse::<u64>().ok()) {
+                                decals[face as usize] = Some(Material::Decal { id, size_x: ROBLOX_DECAL_MAX_WIDTH as f64, size_y: ROBLOX_DECAL_MAX_HEIGHT as f64 })
+                            } else {
+                                decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32.0, size_y: 32.0 })
+                            }
+                        }
+                    });
+
+                node.children()
+                    .filter(|child_node| child_node.tag_name().name() == "Item" && child_node.attribute("class").contains(&"Texture"))
+                    .filter_map(|child_node| child_node.get_child_with_name("Properties"))
+                    .filter_map(|properties| {
+                        if let (Some(face), Some(texture), Some(studs_per_u), Some(studs_per_v), Some(offset_studs_per_u), Some(offset_studs_per_v)) = (
+                            properties.get_child_with_attribute("token", "name", "Face").as_ref().and_then(Node::text).and_then(|text| text.parse::<u8>().ok()),
+                            properties.get_child_with_attribute("Content", "name", "Texture").and_then(|node| node.get_child_with_name("url")).as_ref().and_then(Node::text),
+                            properties.get_child_with_attribute("float", "name", "StudsPerTileU").as_ref().and_then(Node::text).and_then(|text| text.parse::<f64>().ok()),
+                            properties.get_child_with_attribute("float", "name", "StudsPerTileV").as_ref().and_then(Node::text).and_then(|text| text.parse::<f64>().ok()),
+                            properties.get_child_with_attribute("float", "name", "OffsetStudsU").as_ref().and_then(Node::text).and_then(|text| text.parse::<f64>().ok()),
+                            properties.get_child_with_attribute("float", "name", "OffsetStudsV").as_ref().and_then(Node::text).and_then(|text| text.parse::<f64>().ok()),
+                        ) {
+                            Some((face, texture, studs_per_u.abs(), studs_per_v.abs(), offset_studs_per_u, offset_studs_per_v))
+                        } else {
+                            None
+                        }
+                    })
+                    .for_each(|(face, texture, studs_per_u, studs_per_v, offset_u, offset_v)| {
+                        if face < 6 {
+                            if let Some(id) = texture.split_once("?id=").and_then(|(_, id)| id.parse::<u64>().ok()) {
+                                decals[face as usize] = Some(Material::Texture { id, size_x: ROBLOX_DECAL_MAX_WIDTH as f64, size_y: ROBLOX_DECAL_MAX_HEIGHT as f64, studs_per_u, studs_per_v, offset_u, offset_v })
+                            } else {
+                                decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32.0, size_y: 32.0 })
+                            }
                         }
                     });
 
                 if class == "SpawnLocation" {
-                    decals[DECAL_TOP] = Some(Material::Custom { texture: "spawnlocation", generate: true })
+                    decals[DECAL_TOP] = Some(Material::Custom { texture: "spawnlocation", fill: true, generate: true, size_x: 256.0, size_y: 256.0 })
                 }
 
                 let part_type = match class {
@@ -417,6 +533,7 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
 
                 parts.push(Part {
                     part_type,
+                    shape,
                     is_detail,
                     referent,
                     size: Vector3 {
@@ -437,12 +554,9 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
                         ],
                     },
                     color,
+                    transparency,
                     material,
-                    decals: if decals.iter().any(Option::is_some) {
-                        Some(decals)
-                    } else {
-                        None
-                    },
+                    decals,
                 });
             };
             if option.is_none() {
@@ -451,10 +565,6 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
         }
         Some("Model") => {
             let option: Option<()> = try {
-                let referent = node.attribute("referent")?;
-                let properties = node.get_child_with_name("Properties")?;
-                let name = properties.get_child_with_attribute("string", "name", "Name")?.text()?;
-
                 let is_model_detail = is_detail |
                     node.children()
                         .filter(|p| {
@@ -471,12 +581,9 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
                             }
                         });
 
-                let mut child_models = Vec::new();
-                let mut child_parts = Vec::new();
                 for child in node.children() {
-                    parse_xml(child, &mut child_parts, &mut child_models, is_model_detail)
+                    parse_xml(child, parts, is_model_detail)
                 }
-                models.push(Model { name, referent, models: child_models, parts: child_parts })
             };
             if option.is_none() {
                 println!("Skipping malformed Model: {}-{}", node.range().start, node.range().end)
@@ -484,48 +591,94 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, models: &mut Vec
         }
         _ => {
             for child in node.children() {
-                parse_xml(child, parts, models, is_detail)
+                parse_xml(child, parts, is_detail)
             }
         }
     }
 }
 
 #[derive(PartialEq, Copy, Clone)]
+pub enum TextureScale {
+    FILL,
+    FIXED { scale_x: f64, scale_z: f64 },
+}
+
+#[derive(PartialEq, Copy, Clone)]
 pub struct RobloxTexture {
     pub material: Material,
     pub color: Color3,
-    pub scale_x: f64,
-    pub scale_z: f64,
+    pub transparency: u8,
+    pub scale: TextureScale,
+    pub dimension_x: f64,
+    pub dimension_y: f64,
+}
+
+impl RobloxTexture {
+    pub fn must_generate(&self) -> bool {
+        match self.material {
+            Material::Custom { generate, .. } => generate,
+            _ => true
+        }
+    }
 }
 
 impl VMFTexture for RobloxTexture {
-    fn scale_x(&self) -> f64 {
-        self.scale_x
+    fn scale_x(&self, side: Side) -> f64 {
+        match self.scale {
+            TextureScale::FILL => (Vector3::from_array(side.plane[2]) - Vector3::from_array(side.plane[1])).magnitude() / self.dimension_x,
+            TextureScale::FIXED { scale_x, .. } => scale_x
+        }
     }
 
-    fn scale_z(&self) -> f64 {
-        self.scale_z
+    fn scale_z(&self, side: Side) -> f64 {
+        match self.scale {
+            TextureScale::FILL => (Vector3::from_array(side.plane[2]) - Vector3::from_array(side.plane[0])).magnitude() / self.dimension_y,
+            TextureScale::FIXED { scale_z, .. } => scale_z
+        }
+    }
+
+    fn offset_x(&self, side: Side) -> f64 {
+        let position = match side.texture_face {
+            TextureFace::X_POS => -side.plane[2][1],
+            TextureFace::X_NEG => side.plane[2][1],
+            TextureFace::Z_POS => -side.plane[2][0],
+            TextureFace::Z_NEG => side.plane[2][0],
+            TextureFace::Y_POS => -side.plane[2][1],
+            TextureFace::Y_NEG => side.plane[2][1]
+        };
+        (position / self.scale_x(side)) % self.dimension_x
+    }
+
+    fn offset_y(&self, side: Side) -> f64 {
+        let position = match side.texture_face {
+            TextureFace::X_POS => side.plane[2][2],
+            TextureFace::X_NEG => side.plane[2][2],
+            TextureFace::Z_POS => side.plane[2][2],
+            TextureFace::Z_NEG => -side.plane[2][2],
+            TextureFace::Y_POS => -side.plane[2][0],
+            TextureFace::Y_NEG => -side.plane[2][0]
+        };
+        (position / self.scale_z(side)) % self.dimension_y
     }
 }
 
 impl Display for RobloxTexture {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Material::Custom { texture, generate } = self.material {
+        if let Material::Custom { texture, generate, .. } = self.material {
             if !generate {
                 write!(f, "{}", texture)
             } else {
-                write!(f, "rbx/{}_{}-{}-{}", self.material.texture(), self.color.red, self.color.blue, self.color.green)
+                write!(f, "rbx/{}_{}-{}-{}-{}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency)
             }
         } else {
-            write!(f, "rbx/{}_{}-{}-{}", self.material.texture(), self.color.red, self.color.blue, self.color.green)
+            write!(f, "rbx/{}_{}-{}-{}-{}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency)
         }
     }
 }
 
 /// Decomposes a Roblox part into it's polyhedron faces, and returns them as source engine Sides
-/// Currently only supports box-shaped parts
 fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut TextureMap<RobloxTexture>) -> Vec<Side> {
-    let boundaries = part.boundaries();
+    let vertices = part.vertices();
 
     const DECAL_FRONT: usize = 5;
     const DECAL_BACK: usize = 2;
@@ -536,17 +689,17 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
 
     // First three boundaries of a plane form the defining points, in the order required by source engine
     let planes = [
-        ([boundaries[5], boundaries[7], boundaries[4], boundaries[6]], DECAL_TOP),      // +Y
-        ([boundaries[0], boundaries[2], boundaries[1], boundaries[3]], DECAL_BOTTOM),   // -Y
-        ([boundaries[2], boundaries[7], boundaries[6], boundaries[3]], DECAL_RIGHT),    // -X
-        ([boundaries[5], boundaries[0], boundaries[1], boundaries[4]], DECAL_LEFT),     // +X
-        ([boundaries[3], boundaries[4], boundaries[7], boundaries[0]], DECAL_FRONT),    // -Z
-        ([boundaries[6], boundaries[1], boundaries[2], boundaries[5]], DECAL_BACK)      // +Z
+        ([vertices[5], vertices[7], vertices[4], vertices[6]], DECAL_TOP),      // +Y
+        ([vertices[0], vertices[2], vertices[1], vertices[3]], DECAL_BOTTOM),   // -Y
+        ([vertices[2], vertices[7], vertices[6], vertices[3]], DECAL_RIGHT),    // -X
+        ([vertices[5], vertices[0], vertices[1], vertices[4]], DECAL_LEFT),     // +X
+        ([vertices[3], vertices[4], vertices[7], vertices[0]], DECAL_FRONT),    // -Z
+        ([vertices[6], vertices[1], vertices[2], vertices[5]], DECAL_BACK)      // +Z
     ];
 
-    let part_centroid = part.centroid();
+    let part_centroid = part.cframe.position;
 
-    let sides = std::array::IntoIter::new(planes).map(|(plane, decal_side)| {
+    let sides = planes.into_iter().map(|(plane, decal_side)| {
         // Calculate normal vectors of the plane
         let vector_a = plane[0] - plane[1];
         let vector_b = plane[2] - plane[1];
@@ -575,7 +728,7 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
             normal_a
         };
 
-        // Determine which cardinal direction the plane normal vector points; This is the direction from which the texture is rendered.
+        // Determine which cardinal direction the plane normal vector points; This will be the direction from which the texture is rendered in source engine.
         let texture_face = if out_vector.x.abs() >= out_vector.y.abs() && out_vector.x.abs() >= out_vector.z.abs() {
             if out_vector.x.is_sign_positive() {
                 TextureFace::X_POS
@@ -598,39 +751,180 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
         };
 
         let texture =
-            if let Some(decals) = part.decals {
-                if let Some(side_decal) = decals[decal_side] {
-                    if part.part_type == PartType::SpawnLocation && decal_side == DECAL_TOP {    // Bit of a hack, to resize spawnlocation textures, TODO: Move scale into the decal type
-                        RobloxTexture {
-                            material: side_decal,
-                            color: part.color,
-                            scale_x: (vector_b.magnitude() / 256.0) * map_scale,    // TODO: Spawnlocation textures need to be shifted in the X/Z direction to be fully correct
-                            scale_z: (vector_b.magnitude() / 256.0) * map_scale,
+            if let Some(side_decal) = part.decals[decal_side] {
+                RobloxTexture {
+                    material: side_decal,
+                    color: part.color,
+                    transparency: (255.0 * (1.0 - part.transparency)) as u8,
+                    scale: match side_decal {
+                        Material::Decal { .. } | Material::Custom { fill: true, .. } => TextureScale::FILL,
+                        Material::Texture { size_x, size_y, studs_per_u, studs_per_v,  .. } => {
+                            TextureScale::FIXED {
+                                scale_x: map_scale * studs_per_u / size_x,
+                                scale_z: map_scale * studs_per_v / size_y
+                            }
                         }
-                    } else {
-                        RobloxTexture {
-                            material: side_decal,
-                            color: part.color,
-                            scale_x: (1.0 / 32.0) * map_scale,
-                            scale_z: (1.0 / 32.0) * map_scale
-                        }
-                    }
-                } else {
-                    RobloxTexture {
-                        material: part.material,
-                        color: part.color,
-                        scale_x: 0.25,
-                        scale_z: 0.25
-                    }
+                        _ => TextureScale::FIXED { scale_x: map_scale / 32.0, scale_z: map_scale / 32.0 },
+                    },
+                    dimension_x: side_decal.dimension_x(),
+                    dimension_y: side_decal.dimension_y(),
                 }
             } else {
                 RobloxTexture {
                     material: part.material,
                     color: part.color,
-                    scale_x: 0.25,
-                    scale_z: 0.25
+                    transparency: (255.0 * (1.0 - part.transparency)) as u8,
+                    scale: TextureScale::FIXED { scale_x: map_scale / 32.0, scale_z: map_scale / 32.0 },
+                    dimension_x: part.material.dimension_x(),
+                    dimension_y: part.material.dimension_y(),
                 }
             };
+
+        let displacement = match part.shape {
+            PartShape::Sphere => {
+                let (mut offsets, offset_normals) = match texture_face {
+                    TextureFace::X_POS => {
+                        let offsets = [
+                            [-237.861, 237.861, 237.861, -201.755, 92.3116, 201.755, -183.246, 0.0, 183.246, -201.755, -92.3116, 201.755, -237.861, -237.861, 237.861],
+                            [-201.755, 201.755, 92.3116, -125.21, 84.672, 84.6719, -100.481, 0.0, 77.4723, -125.21, -84.6719, 84.6719, -201.755, -201.755, 92.3116],
+                            [-183.246, 183.246, 0.0, -100.481, 77.4723, 0.0, -69.1808, 0.0, 0.0, -100.481, -77.4723, 0.0, -183.246, -183.246, 0.0],
+                            [-201.755, 201.755, -92.3116, -125.21, 84.672, -84.672, -100.481, 0.0, -77.4723, -125.21, -84.672, -84.672, -201.755, -201.755, -92.3116],
+                            [-237.861, 237.861, -237.861, -201.755, 92.3116, -201.755, -183.246, 0.0, -183.246, -201.755, -92.3116, -201.755, -237.861, -237.861, -237.861]
+                        ];
+                        let offset_normals = [
+                            [0.563819, -0.563819, -0.563819, 0.653738, -0.305397, -0.658052, 0.690534, 0.0, -0.690534, 0.655635, 0.303805, -0.656901, 0.563819, 0.563819, -0.563819],
+                            [0.656901, -0.655635, -0.303805, 0.890386, -0.296795, -0.269814, 0.917459, -0.00062678, -0.334578, 0.883334, 0.294445, -0.294445, 0.649801, 0.662669, -0.303812],
+                            [0.690534, -0.690534, 0.0, 0.918221, -0.332479, -0.00122529, 0.976562, 0.0, 0.0, 0.917459, 0.334578, 0.00062678, 0.690534, 0.690534, 0.0],
+                            [0.658053, -0.653738, 0.305397, 0.901673, -0.265198, 0.265198, 0.918221, 0.00122529, 0.332479, 0.890386, 0.269814, 0.296795, 0.65954, 0.652252, 0.305366],
+                            [0.563819, -0.563819, 0.563819, 0.662669, -0.303812, 0.649801, 0.690534, 0.0, 0.690534, 0.652252, 0.305367, 0.65954, 0.563819, 0.563819, 0.563819]
+                        ];
+                        (offsets, offset_normals)
+                    }
+                    TextureFace::X_NEG => {
+                        let offsets = [
+                            [237.861, 237.861, 237.861, 201.755, 201.755, 92.3116, 183.246, 183.246, 0.0, 201.755, 201.755, -92.3116, 237.861, 237.861, -237.861],
+                            [201.755, 92.3116, 201.755, 125.211, 84.672, 84.6719, 100.481, 77.4723, 0.0, 125.211, 84.672, -84.672, 201.755, 92.3116, -201.755],
+                            [183.246, 0.0, 183.246, 100.481, 0.0, 77.4723, 69.181, 0.0, 0.0, 100.481, 0.0, -77.4723, 183.246, 0.0, -183.246],
+                            [201.755, -92.3116, 201.755, 125.211, -84.672, 84.6719, 100.481, -77.4723, 0.0, 125.211, -84.672, -84.672, 201.755, -92.3116, -201.755],
+                            [237.861, -237.861, 237.861, 201.755, -201.755, 92.3116, 183.246, -183.246, 0.0, 201.755, -201.755, -92.3116, 237.861, -237.861, -237.861]
+                        ];
+                        let offset_normals = [
+                            [-0.563819, -0.563819, -0.563819, -0.65954, -0.652252, -0.305366, -0.690534, -0.690534, 0.0, -0.649801, -0.662669, 0.303812, -0.563819, -0.563819, 0.563819],
+                            [-0.652252, -0.305367, -0.65954, -0.890386, -0.269814, -0.296795, -0.917459, -0.334578, -0.00062678, -0.883334, -0.294445, 0.294445, -0.655635, -0.303805, 0.656901],
+                            [-0.690534, 0.0, -0.690534, -0.918221, -0.0012253, -0.332479, -0.976562, 0.0, 0.0, -0.917459, 0.000626779, 0.334578, -0.690534, 0.0, 0.690534],
+                            [-0.662669, 0.303812, -0.649801, -0.901673, 0.265198, -0.265198, -0.918221, 0.332479, 0.00122528, -0.890386, 0.296795, 0.269814, -0.653738, 0.305397, 0.658053],
+                            [-0.563819, 0.563819, -0.563819, -0.658053, 0.653738, -0.305397, -0.690534, 0.690534, 0.0, -0.656901, 0.655635, 0.303805, -0.563819, 0.563819, 0.563819]
+                        ];
+                        (offsets, offset_normals)
+                    }
+                    TextureFace::Z_POS => {
+                        let offsets = [
+                            [237.861, 237.861, 237.861, 92.3116, 201.755, 201.755, 0.0, 183.246, 183.246, -92.3116, 201.755, 201.755, -237.861, 237.861, 237.861],
+                            [201.755, 201.755, 92.3116, 84.6719, 125.21, 84.6719, 0.0, 100.481, 77.4723, -84.672, 125.21, 84.6719, -201.755, 201.755, 92.3116],
+                            [183.246, 183.246, 0.0, 77.4723, 100.481, 0.0, 0.0, 69.1808, 0.0, -77.4723, 100.481, 0.0, -183.246, 183.246, 0.0],
+                            [201.755, 201.755, -92.3116, 84.672, 125.21, -84.672, 0.0, 100.481, -77.4723, -84.672, 125.21, -84.672, -201.755, 201.755, -92.3116],
+                            [237.861, 237.861, -237.861, 92.3116, 201.755, -201.755, 0.0, 183.246, -183.246, -92.3116, 201.755, -201.755, -237.861, 237.861, -237.861]
+                        ];
+                        let offset_normals = [
+                            [-0.563819, -0.563819, -0.563819, -0.305367, -0.65954, -0.652252, 0.0, -0.690534, -0.690534, 0.303813, -0.649801, -0.662669, 0.563819, -0.563819, -0.563819],
+                            [-0.65954, -0.652252, -0.305366, -0.296795, -0.890386, -0.269814, -0.00062678, -0.917459, -0.334578, 0.294445, -0.883334, -0.294445, 0.656901, -0.655635, -0.303805],
+                            [-0.690534, -0.690534, 0.0, -0.332479, -0.918221, -0.0012253, 0.0, -0.976562, 0.0, 0.334578, -0.917459, 0.00062678, 0.690534, -0.690534, 0.0],
+                            [-0.649801, -0.662669, 0.303812, -0.265198, -0.901673, 0.265198, 0.00122531, -0.918221, 0.332479, 0.269814, -0.890386, 0.296795, 0.658053, -0.653738, 0.305397],
+                            [-0.563819, -0.563819, 0.563819, -0.305397, -0.658052, 0.653738, 0.0, -0.690534, 0.690534, 0.303805, -0.656901, 0.655635, 0.563819, -0.563819, 0.563819]
+                        ];
+                        (offsets, offset_normals)
+                    }
+                    TextureFace::Z_NEG => {
+                        let offsets = [
+                            [237.861, -237.861, 237.861, 201.755, -201.755, 92.3116, 183.246, -183.246, 0.0, 201.755, -201.755, -92.3116, 237.861, -237.861, -237.861],
+                            [92.3116, -201.755, 201.755, 84.672, -125.211, 84.6719, 77.4723, -100.481, 0.0, 84.6719, -125.211, -84.672, 92.3116, -201.755, -201.755],
+                            [0.0, -183.246, 183.246, 0.0, -100.481, 77.4723, 0.0, -69.181, 0.0, 0.0, -100.481, -77.4723, 0.0, -183.246, -183.246],
+                            [-92.3116, -201.755, 201.755, -84.672, -125.211, 84.6719, -77.4723, -100.481, 0.0, -84.672, -125.211, -84.672, -92.3116, -201.755, -201.755],
+                            [-237.861, -237.861, 237.861, -201.755, -201.755, 92.3116, -183.246, -183.246, 0.0, -201.755, -201.755, -92.3116, -237.861, -237.861, -237.861]
+                        ];
+                        let offset_normals = [
+                            [-0.563819, 0.563819, -0.563819, -0.658053, 0.653738, -0.305397, -0.690534, 0.690534, 0.0, -0.656901, 0.655635, 0.303805, -0.563819, 0.563819, 0.563819],
+                            [-0.303805, 0.656901, -0.655635, -0.269814, 0.890386, -0.296795, -0.334578, 0.917459, -0.00062678, -0.294445, 0.883334, 0.294445, -0.303812, 0.649801, 0.662669],
+                            [0.0, 0.690534, -0.690534, -0.00122528, 0.918221, -0.332479, 0.0, 0.976562, 0.0, 0.00062678, 0.917459, 0.334578, 0.0, 0.690534, 0.690534],
+                            [0.305397, 0.658053, -0.653738, 0.265198, 0.901673, -0.265198, 0.332479, 0.918221, 0.00122528, 0.296795, 0.890386, 0.269814, 0.305366, 0.65954, 0.652252],
+                            [0.563819, 0.563819, -0.563819, 0.649801, 0.662669, -0.303812, 0.690534, 0.690534, 0.0, 0.65954, 0.652252, 0.305366, 0.563819, 0.563819, 0.563819]
+                        ];
+                        (offsets, offset_normals)
+                    }
+                    TextureFace::Y_NEG => {
+                        let offsets = [
+                            [237.861, 237.861, 237.861, 201.755, 92.3116, 201.755, 183.246, 0.0, 183.246, 201.755, -92.3116, 201.755, 237.861, -237.861, 237.861],
+                            [92.3116, 201.755, 201.755, 84.672, 84.672, 125.21, 77.4723, 0.0, 100.481, 84.6719, -84.6719, 125.21, 92.3116, -201.755, 201.755],
+                            [0.0, 183.246, 183.246, 0.0, 77.4723, 100.481, 0.0, 0.0, 69.1808, 0.0, -77.4723, 100.481, 0.0, -183.246, 183.246],
+                            [-92.3116, 201.755, 201.755, -84.672, 84.672, 125.21, -77.4723, 0.0, 100.481, -84.672, -84.672, 125.21, -92.3116, -201.755, 201.755],
+                            [-237.861, 237.861, 237.861, -201.755, 92.3116, 201.755, -183.246, 0.0, 183.246, -201.755, -92.3116, 201.755, -237.861, -237.861, 237.861],
+                        ];
+                        let offset_normals = [
+                            [-0.563819, -0.563819, -0.563819, -0.652252, -0.305367, -0.65954, -0.690534, 0.0, -0.690534, -0.662669, 0.303812, -0.649801, -0.563819, 0.563819, -0.563819],
+                            [-0.305367, -0.65954, -0.652252, -0.269814, -0.296795, -0.890386, -0.334578, -0.00062678, -0.917459, -0.294445, 0.294445, -0.883334, -0.303805, 0.656901, -0.655635],
+                            [0.0, -0.690534, -0.690534, -0.00122527, -0.332479, -0.918221, 0.0, 0.0, -0.976562, 0.00062678, 0.334578, -0.917459, 0.0, 0.690534, -0.690534],
+                            [0.303813, -0.649801, -0.662669, 0.265198, -0.265198, -0.901673, 0.332479, 0.00122528, -0.918221, 0.296795, 0.269814, -0.890386, 0.305397, 0.658053, -0.653738],
+                            [0.563819, -0.563819, -0.563819, 0.653738, -0.305397, -0.658052, 0.690534, 0.0, -0.690534, 0.655635, 0.303805, -0.656901, 0.563819, 0.563819, -0.563819],
+                        ];
+                        (offsets, offset_normals)
+                    }
+                    TextureFace::Y_POS => {
+                        let offsets = [
+                            [237.861, 237.861, -237.861, 92.3116, 201.755, -201.755, 0.0, 183.246, -183.246, -92.3116, 201.755, -201.755, -237.861, 237.861, -237.861],
+                            [201.755, 92.3116, -201.755, 84.6719, 84.672, -125.211, 0.0, 77.4723, -100.481, -84.672, 84.672, -125.21, -201.755, 92.3116, -201.755],
+                            [183.246, 0.0, -183.246, 77.4723, 0.0, -100.481, 0.0, 0.0, -69.1809, -77.4723, 0.0, -100.481, -183.246, 0.0, -183.246],
+                            [201.755, -92.3116, -201.755, 84.672, -84.672, -125.211, 0.0, -77.4723, -100.481, -84.672, -84.672, -125.21, -201.755, -92.3116, -201.755],
+                            [237.861, -237.861, -237.861, 92.3116, -201.755, -201.755, 0.0, -183.246, -183.246, -92.3116, -201.755, -201.755, -237.861, -237.861, -237.861],
+                        ];
+                        let offset_normals = [
+                            [-0.563819, -0.563819, 0.563819, -0.305397, -0.658052, 0.653738, 0.0, -0.690534, 0.690534, 0.303805, -0.656901, 0.655635, 0.563819, -0.563819, 0.563819],
+                            [-0.655635, -0.303805, 0.656901, -0.296795, -0.269814, 0.890386, -0.00062678, -0.334578, 0.917459, 0.294445, -0.294445, 0.883334, 0.662669, -0.303812, 0.649801],
+                            [-0.690534, 0.0, 0.690534, -0.332479, -0.00122531, 0.918221, 0.0, 0.0, 0.976562, 0.334578, 0.00062678, 0.917459, 0.690534, 0.0, 0.690534],
+                            [-0.653738, 0.305397, 0.658053, -0.265198, 0.265198, 0.901673, 0.00122531, 0.332479, 0.918221, 0.269814, 0.296795, 0.890386, 0.652252, 0.305367, 0.65954],
+                            [-0.563819, 0.563819, 0.563819, -0.303812, 0.649801, 0.662669, 0.0, 0.690534, 0.690534, 0.305366, 0.65954, 0.652252, 0.563819, 0.563819, 0.563819],
+                        ];
+                        (offsets, offset_normals)
+                    }
+                };
+                let [size_x, size_y, size_z] = part.size.array();
+                for row in &mut offsets {
+                    row[0] *= size_x * map_scale / 1000.0;
+                    row[1] *= size_y * map_scale / 1000.0;
+                    row[2] *= size_z * map_scale / 1000.0;
+                    row[3] *= size_x * map_scale / 1000.0;
+                    row[4] *= size_y * map_scale / 1000.0;
+                    row[5] *= size_z * map_scale / 1000.0;
+                    row[6] *= size_x * map_scale / 1000.0;
+                    row[7] *= size_y * map_scale / 1000.0;
+                    row[8] *= size_z * map_scale / 1000.0;
+                    row[9] *= size_x * map_scale / 1000.0;
+                    row[10] *= size_y * map_scale / 1000.0;
+                    row[11] *= size_z * map_scale / 1000.0;
+                    row[12] *= size_x * map_scale / 1000.0;
+                    row[13] *= size_y * map_scale / 1000.0;
+                    row[14] *= size_z * map_scale / 1000.0;
+                }
+
+                Some(Displacement {
+                    offsets,
+                    offset_normals,
+                    start_position: to_source_coordinates({
+                        let mut x = f64::MAX;
+                        let mut y = f64::MAX;
+                        let mut z = f64::MIN;
+
+                        for vector in plane {
+                            x = x.min(vector.x);
+                            y = y.min(vector.y);
+                            z = z.max(vector.z);
+                        }
+                        Vector3 { x, y, z } * map_scale
+                    }),
+                })
+            }
+            PartShape::Block => None,
+            PartShape::Cylinder => None,
+        };
 
         let side = Side {
             id: *id,
@@ -641,6 +935,7 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
                 to_source_coordinates(plane[1] * map_scale),
                 to_source_coordinates(plane[2] * map_scale)
             ],
+            displacement,
         };
         *id += 1;
         side
@@ -668,6 +963,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
             },
             sides: decompose_part(Part {
                 part_type: PartType::Part,
+                shape: PartShape::Block,
                 is_detail: false,
                 referent: "SKYBOX+X",
                 size: Vector3 {
@@ -684,8 +980,9 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                     rot_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 },
                 color: Color3::white(),
-                material: Material::Custom { texture: "tools/toolsskybox", generate: false },
-                decals: None,
+                transparency: 0.0,
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
         Solid {
@@ -695,6 +992,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
             },
             sides: decompose_part(Part {
                 part_type: PartType::Part,
+                shape: PartShape::Block,
                 is_detail: false,
                 referent: "SKYBOX+Y",
                 size: Vector3 {
@@ -711,8 +1009,9 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                     rot_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 },
                 color: Color3::white(),
-                material: Material::Custom { texture: "tools/toolsskybox", generate: false },
-                decals: None,
+                transparency: 0.0,
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
         Solid {
@@ -722,6 +1021,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
             },
             sides: decompose_part(Part {
                 part_type: PartType::Part,
+                shape: PartShape::Block,
                 is_detail: false,
                 referent: "SKYBOX+Z",
                 size: Vector3 {
@@ -738,8 +1038,9 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                     rot_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 },
                 color: Color3::white(),
-                material: Material::Custom { texture: "tools/toolsskybox", generate: false },
-                decals: None,
+                transparency: 0.0,
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
         Solid {
@@ -749,6 +1050,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
             },
             sides: decompose_part(Part {
                 part_type: PartType::Part,
+                shape: PartShape::Block,
                 is_detail: false,
                 referent: "SKYBOX-X",
                 size: Vector3 {
@@ -765,8 +1067,9 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                     rot_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 },
                 color: Color3::white(),
-                material: Material::Custom { texture: "tools/toolsskybox", generate: false },
-                decals: None,
+                transparency: 0.0,
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
         Solid {
@@ -776,6 +1079,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
             },
             sides: decompose_part(Part {
                 part_type: PartType::Part,
+                shape: PartShape::Block,
                 is_detail: false,
                 referent: "SKYBOX-Y",
                 size: Vector3 {
@@ -792,8 +1096,9 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                     rot_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 },
                 color: Color3::white(),
-                material: Material::Custom { texture: "tools/toolsskybox", generate: false },
-                decals: None,
+                transparency: 0.0,
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
         Solid {
@@ -803,6 +1108,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
             },
             sides: decompose_part(Part {
                 part_type: PartType::Part,
+                shape: PartShape::Block,
                 is_detail: false,
                 referent: "SKYBOX-Z",
                 size: Vector3 {
@@ -819,8 +1125,9 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                     rot_matrix: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
                 },
                 color: Color3::white(),
-                material: Material::Custom { texture: "tools/toolsskybox", generate: false },
-                decals: None,
+                transparency: 0.0,
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         }
     ]

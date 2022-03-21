@@ -2,11 +2,12 @@
 
 use std::io::Write;
 use std::fmt::Display;
-use std::slice::Iter;
 
 pub trait VMFTexture: Display + PartialEq {
-    fn scale_x(&self) -> f64;
-    fn scale_z(&self) -> f64;
+    fn scale_x(&self, side: Side) -> f64;
+    fn scale_z(&self, side: Side) -> f64;
+    fn offset_x(&self, side: Side) -> f64;
+    fn offset_y(&self, side: Side) -> f64;
 }
 
 pub struct TextureMap<T: VMFTexture> {
@@ -19,9 +20,14 @@ impl<T: VMFTexture> TextureMap<T> {
             inner: Vec::new()
         }
     }
+}
 
-    pub fn iter(&self) -> Iter<'_, T> {
-        self.inner.iter()
+impl<T: VMFTexture> IntoIterator for TextureMap<T> {
+    type Item = T;
+    type IntoIter = <Vec<T> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.inner.into_iter()
     }
 }
 
@@ -53,7 +59,16 @@ pub struct TextureID {
 #[derive(Debug, Clone)]
 pub struct Solid {
     pub id: u32,
-    pub sides: Vec<Side>,
+    pub sides: Vec<Side>
+}
+
+
+/// Struct to represent source engine brush displacement
+#[derive(Debug, Copy, Clone)]
+pub struct Displacement {
+    pub offsets: [[f64; 15]; 5],
+    pub offset_normals: [[f64; 15]; 5],
+    pub start_position: [f64; 3],
 }
 
 /// Direction from which to apply texture
@@ -70,23 +85,23 @@ pub enum TextureFace {
 impl TextureFace {
     pub fn u_axis(self) -> &'static str {
         match self {
-            TextureFace::X_POS => "[0 1 0 0]",
-            TextureFace::X_NEG => "[0 -1 0 0]",
-            TextureFace::Z_POS => "[1 0 0 0]",
-            TextureFace::Z_NEG => "[-1 0 0 0]",
-            TextureFace::Y_POS => "[0 1 0 0]",
-            TextureFace::Y_NEG => "[0 -1 0 0]",
+            TextureFace::X_POS => "0 1 0",
+            TextureFace::X_NEG => "0 -1 0",
+            TextureFace::Z_POS => "1 0 0",
+            TextureFace::Z_NEG => "-1 0 0",
+            TextureFace::Y_POS => "0 1 0",
+            TextureFace::Y_NEG => "0 -1 0",
         }
     }
 
     pub fn v_axis(self) -> &'static str {
         match self {
-            TextureFace::X_POS => "[0 0 -1 0]",
-            TextureFace::X_NEG => "[0 0 -1 0]",
-            TextureFace::Z_POS => "[0 0 -1 0]",
-            TextureFace::Z_NEG => "[0 0 -1 0]",
-            TextureFace::Y_POS => "[1 0 0 0]",
-            TextureFace::Y_NEG => "[1 0 0 0]",
+            TextureFace::X_POS => "0 0 -1",
+            TextureFace::X_NEG => "0 0 -1",
+            TextureFace::Z_POS => "0 0 -1",
+            TextureFace::Z_NEG => "0 0 -1",
+            TextureFace::Y_POS => "1 0 0",
+            TextureFace::Y_NEG => "1 0 0",
         }
     }
 }
@@ -97,6 +112,7 @@ pub struct Side {
     pub texture: TextureID,
     pub texture_face: TextureFace,
     pub plane: [[f64; 3]; 3],
+    pub displacement: Option<Displacement>
 }
 
 
@@ -168,18 +184,97 @@ impl<T: Write> VMFBuilder<T> {
                         \t\t\t\"id\" \"{}\"\n\
                         \t\t\t\"plane\" \"({} {} {}) ({} {} {}) ({} {} {})\"\n\
                         \t\t\t\"material\" \"{}\"\n\
-                        \t\t\t\"uaxis\" \"{} {}\"\n\
-                        \t\t\t\"vaxis\" \"{} {}\"\n\
+                        \t\t\t\"uaxis\" \"[{} {}] {}\"\n\
+                        \t\t\t\"vaxis\" \"[{} {}] {}\"\n\
                         \t\t\t\"rotation\" \"0\"\n\
                         \t\t\t\"lightmapscale\" \"16\"\n\
-                        \t\t\t\"smoothing_groups\" \"0\"\n\
-                    \t\t}}\n",
+                        \t\t\t\"smoothing_groups\" \"0\"\n",
                     side.id,
                     side.plane[0][0], side.plane[0][1], side.plane[0][2], side.plane[1][0], side.plane[1][1], side.plane[1][2], side.plane[2][0], side.plane[2][1], side.plane[2][2],
                     texture,
-                    side.texture_face.u_axis(), texture.scale_x(),
-                    side.texture_face.v_axis(), texture.scale_z()
+                    side.texture_face.u_axis(), texture.offset_x(side), texture.scale_x(side),
+                    side.texture_face.v_axis(), texture.offset_y(side), texture.scale_z(side)
                 )?;
+                if let Some(displacement) = side.displacement {
+                    write!(
+                        self.0,
+                        r#"
+                        dispinfo
+                        {{
+                            "power" "2"
+                            "startposition" "[{} {} {}]"
+                            "flags" "0"
+                            "elevation" "0"
+                            "subdiv" "1"
+                            normals
+                            {{
+                                "row0" "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+                                "row1" "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+                                "row2" "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+                                "row3" "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+                                "row4" "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+                            }}
+                            distances
+                            {{
+                                "row0" "1e-05 1e-05 1e-05 1e-05 1e-05"
+                                "row1" "1e-05 1e-05 1e-05 1e-05 1e-05"
+                                "row2" "1e-05 1e-05 1e-05 1e-05 1e-05"
+                                "row3" "1e-05 1e-05 1e-05 1e-05 1e-05"
+                                "row4" "1e-05 1e-05 1e-05 1e-05 1e-05"
+                            }}
+                            offsets
+                            {{
+                                "row0" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row1" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row2" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row3" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row4" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                            }}
+                            offset_normals
+                            {{
+                                "row0" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row1" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row2" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row3" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                                "row4" "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {}"
+                            }}
+                            alphas
+                            {{
+                                "row0" "0 0 0 0 0"
+                                "row1" "0 0 0 0 0"
+                                "row2" "0 0 0 0 0"
+                                "row3" "0 0 0 0 0"
+                                "row4" "0 0 0 0 0"
+                            }}
+                            triangle_tags
+                            {{
+                                "row0" "0 0 0 0 0 0 0 0"
+                                "row1" "0 0 0 0 0 0 0 0"
+                                "row2" "0 0 0 0 0 0 0 0"
+                                "row3" "0 0 0 0 0 0 0 0"
+                            }}
+                            allowed_verts
+                            {{
+                                "10" "-1 -1 -1 -1 -1 -1 -1 -1 -1 -1"
+                            }}
+                        }}
+                        "#,
+                        displacement.start_position[0],
+                        displacement.start_position[1],
+                        displacement.start_position[2],
+                        displacement.offsets[0][0], displacement.offsets[0][1], displacement.offsets[0][2], displacement.offsets[0][3], displacement.offsets[0][4], displacement.offsets[0][5], displacement.offsets[0][6], displacement.offsets[0][7], displacement.offsets[0][8], displacement.offsets[0][9], displacement.offsets[0][10], displacement.offsets[0][11], displacement.offsets[0][12], displacement.offsets[0][13], displacement.offsets[0][14],
+                        displacement.offsets[1][0], displacement.offsets[1][1], displacement.offsets[1][2], displacement.offsets[1][3], displacement.offsets[1][4], displacement.offsets[1][5], displacement.offsets[1][6], displacement.offsets[1][7], displacement.offsets[1][8], displacement.offsets[1][9], displacement.offsets[1][10], displacement.offsets[1][11], displacement.offsets[1][12], displacement.offsets[1][13], displacement.offsets[1][14],
+                        displacement.offsets[2][0], displacement.offsets[2][1], displacement.offsets[2][2], displacement.offsets[2][3], displacement.offsets[2][4], displacement.offsets[2][5], displacement.offsets[2][6], displacement.offsets[2][7], displacement.offsets[2][8], displacement.offsets[2][9], displacement.offsets[2][10], displacement.offsets[2][11], displacement.offsets[2][12], displacement.offsets[2][13], displacement.offsets[2][14],
+                        displacement.offsets[3][0], displacement.offsets[3][1], displacement.offsets[3][2], displacement.offsets[3][3], displacement.offsets[3][4], displacement.offsets[3][5], displacement.offsets[3][6], displacement.offsets[3][7], displacement.offsets[3][8], displacement.offsets[3][9], displacement.offsets[3][10], displacement.offsets[3][11], displacement.offsets[3][12], displacement.offsets[3][13], displacement.offsets[3][14],
+                        displacement.offsets[4][0], displacement.offsets[4][1], displacement.offsets[4][2], displacement.offsets[4][3], displacement.offsets[4][4], displacement.offsets[4][5], displacement.offsets[4][6], displacement.offsets[4][7], displacement.offsets[4][8], displacement.offsets[4][9], displacement.offsets[4][10], displacement.offsets[4][11], displacement.offsets[4][12], displacement.offsets[4][13], displacement.offsets[4][14],
+                        displacement.offset_normals[0][0], displacement.offset_normals[0][1], displacement.offset_normals[0][2], displacement.offset_normals[0][3], displacement.offset_normals[0][4], displacement.offset_normals[0][5], displacement.offset_normals[0][6], displacement.offset_normals[0][7], displacement.offset_normals[0][8], displacement.offset_normals[0][9], displacement.offset_normals[0][10], displacement.offset_normals[0][11], displacement.offset_normals[0][12], displacement.offset_normals[0][13], displacement.offset_normals[0][14],
+                        displacement.offset_normals[1][0], displacement.offset_normals[1][1], displacement.offset_normals[1][2], displacement.offset_normals[1][3], displacement.offset_normals[1][4], displacement.offset_normals[1][5], displacement.offset_normals[1][6], displacement.offset_normals[1][7], displacement.offset_normals[1][8], displacement.offset_normals[1][9], displacement.offset_normals[1][10], displacement.offset_normals[1][11], displacement.offset_normals[1][12], displacement.offset_normals[1][13], displacement.offset_normals[1][14],
+                        displacement.offset_normals[2][0], displacement.offset_normals[2][1], displacement.offset_normals[2][2], displacement.offset_normals[2][3], displacement.offset_normals[2][4], displacement.offset_normals[2][5], displacement.offset_normals[2][6], displacement.offset_normals[2][7], displacement.offset_normals[2][8], displacement.offset_normals[2][9], displacement.offset_normals[2][10], displacement.offset_normals[2][11], displacement.offset_normals[2][12], displacement.offset_normals[2][13], displacement.offset_normals[2][14],
+                        displacement.offset_normals[3][0], displacement.offset_normals[3][1], displacement.offset_normals[3][2], displacement.offset_normals[3][3], displacement.offset_normals[3][4], displacement.offset_normals[3][5], displacement.offset_normals[3][6], displacement.offset_normals[3][7], displacement.offset_normals[3][8], displacement.offset_normals[3][9], displacement.offset_normals[3][10], displacement.offset_normals[3][11], displacement.offset_normals[3][12], displacement.offset_normals[3][13], displacement.offset_normals[3][14],
+                        displacement.offset_normals[4][0], displacement.offset_normals[4][1], displacement.offset_normals[4][2], displacement.offset_normals[4][3], displacement.offset_normals[4][4], displacement.offset_normals[4][5], displacement.offset_normals[4][6], displacement.offset_normals[4][7], displacement.offset_normals[4][8], displacement.offset_normals[4][9], displacement.offset_normals[4][10], displacement.offset_normals[4][11], displacement.offset_normals[4][12], displacement.offset_normals[4][13], displacement.offset_normals[4][14],
+                    )?;
+                }
+                write!(self.0, "\t\t}}\n")?;
             }
 
             write!(
@@ -218,8 +313,8 @@ impl<T: Write> VMFBuilder<T> {
                         \t\t\t\"id\" \"{}\"\n\
                         \t\t\t\"plane\" \"({} {} {}) ({} {} {}) ({} {} {})\"\n\
                         \t\t\t\"material\" \"{}\"\n\
-                        \t\t\t\"uaxis\" \"{} {}\"\n\
-                        \t\t\t\"vaxis\" \"{} {}\"\n\
+                        \t\t\t\"uaxis\" \"[{} {}] {}\"\n\
+                        \t\t\t\"vaxis\" \"[{} {}] {}\"\n\
                         \t\t\t\"rotation\" \"0\"\n\
                         \t\t\t\"lightmapscale\" \"16\"\n\
                         \t\t\t\"smoothing_groups\" \"0\"\n\
@@ -227,8 +322,8 @@ impl<T: Write> VMFBuilder<T> {
                     side.id,
                     side.plane[0][0], side.plane[0][1], side.plane[0][2], side.plane[1][0], side.plane[1][1], side.plane[1][2], side.plane[2][0], side.plane[2][1], side.plane[2][2],
                     texture,
-                    side.texture_face.u_axis(), texture.scale_x(),
-                    side.texture_face.v_axis(), texture.scale_z()
+                    side.texture_face.u_axis(), texture.offset_x(side), texture.scale_x(side),
+                    side.texture_face.v_axis(), texture.offset_y(side), texture.scale_z(side)
                 )?;
             }
 
