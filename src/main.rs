@@ -319,9 +319,9 @@ fn main() {
                             }
                         };
                         if let Some(image) = image {
-                            let image_out_path = texture_output_folder.join(format!("{}_{}-{}-{}-{}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency))
+                            let image_out_path = texture_output_folder.join(format!("{}_{:x}-{:x}-{:x}-{:x}-{:x}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency, texture.reflectance))
                                 .with_extension("png");
-                            let vmt_out_path = texture_output_folder.join(format!("{}_{}-{}-{}-{}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency))
+                            let vmt_out_path = texture_output_folder.join(format!("{}_{:x}-{:x}-{:x}-{:x}-{:x}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency, texture.reflectance))
                                 .with_extension("vmt");
 
                             let width = image.width();
@@ -335,25 +335,21 @@ fn main() {
                                 }
                             }
 
-                            if let Err(error) = File::create(vmt_out_path).and_then(|mut file| {
+                            if let Err(error) = File::create(vmt_out_path).and_then(|mut file| try {
+                                    write!(file,
+                                           "\"LightmappedGeneric\"\n\
+                                           {{\n\
+                                           \t\"$basetexture\" \"{}\"\n",
+                                           texture
+                                    )?;
                                 if texture.transparency != 255 {
-                                    write!(file,
-                                           "\"LightmappedGeneric\"\n\
-                                                {{\n\
-                                                \"$basetexture\" \"{}\"\n\
-                                                \"$translucent\" \"1\"\n\
-                                                }}\n",
-                                           texture
-                                    )
-                                } else {
-                                    write!(file,
-                                           "\"LightmappedGeneric\"\n\
-                                                {{\n\
-                                                \"$basetexture\" \"{}\"\n\
-                                                }}\n",
-                                           texture
-                                    )
+                                    write!(file, "\t\"$translucent\" \"1\"\n")?;
                                 }
+                                if texture.reflectance != 0 {
+                                    write!(file, "\t\"$envmap\" \"env_cubemap\"\n")?;
+                                    write!(file, "\t\"$envmaptint\" \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance=1.0/(255.0/(texture.reflectance as f64)))?;
+                                }
+                                write!(file, "}}\n")?;
                             }) {
                                 println!("\t\twarning: could not write VMT: {}", error);
                             }
@@ -427,6 +423,11 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: bool)
                     .parse::<f64>()
                     .ok()?;
 
+                let reflectance = properties.get_child_with_attribute("float", "name", "Reflectance")?
+                    .text()?
+                    .parse::<f64>()
+                    .ok()?;
+
                 let material = Material::from_id(
                     properties.get_child_with_attribute("token", "name", "Material")?
                         .text()?
@@ -434,14 +435,15 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: bool)
                         .ok()?
                 )?;
 
-                let shape = match properties.get_child_with_attribute("token", "name", "shape")?
-                    .text()?
-                    .parse::<u32>()
-                    .ok()?
+                // Truss parts do not have a shape field, so this field is not required
+                let shape = match properties.get_child_with_attribute("token", "name", "shape")
+                    .as_ref()
+                    .and_then(Node::text)
+                    .and_then(|text| text.parse::<u32>().ok())
                 {
-                    0 => PartShape::Sphere,
-                    2 => PartShape::Cylinder,
-                    1 | _ => PartShape::Block,  // Default to block
+                    Some(0) => PartShape::Sphere,
+                    Some(2) => PartShape::Cylinder,
+                    Some(1) | _ => PartShape::Block,  // Default to block
                 };
 
                 const DECAL_FRONT: usize = 5;
@@ -555,6 +557,7 @@ fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: bool)
                     },
                     color,
                     transparency,
+                    reflectance,
                     material,
                     decals,
                 });
@@ -608,6 +611,7 @@ pub struct RobloxTexture {
     pub material: Material,
     pub color: Color3,
     pub transparency: u8,
+    pub reflectance: u8,
     pub scale: TextureScale,
     pub dimension_x: f64,
     pub dimension_y: f64,
@@ -668,10 +672,10 @@ impl Display for RobloxTexture {
             if !generate {
                 write!(f, "{}", texture)
             } else {
-                write!(f, "rbx/{}_{}-{}-{}-{}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency)
+                write!(f, "rbx/{}_{:x}-{:x}-{:x}-{:x}-{:x}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency, self.reflectance)
             }
         } else {
-            write!(f, "rbx/{}_{}-{}-{}-{}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency)
+            write!(f, "rbx/{}_{:x}-{:x}-{:x}-{:x}-{:x}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency, self.reflectance)
         }
     }
 }
@@ -756,6 +760,7 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
                     material: side_decal,
                     color: part.color,
                     transparency: (255.0 * (1.0 - part.transparency)) as u8,
+                    reflectance: (255.0 * part.reflectance) as u8,
                     scale: match side_decal {
                         Material::Decal { .. } | Material::Custom { fill: true, .. } => TextureScale::FILL,
                         Material::Texture { size_x, size_y, studs_per_u, studs_per_v,  .. } => {
@@ -774,6 +779,7 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
                     material: part.material,
                     color: part.color,
                     transparency: (255.0 * (1.0 - part.transparency)) as u8,
+                    reflectance: (255.0 * part.reflectance) as u8,
                     scale: TextureScale::FIXED { scale_x: map_scale / 32.0, scale_z: map_scale / 32.0 },
                     dimension_x: part.material.dimension_x(),
                     dimension_y: part.material.dimension_y(),
@@ -981,6 +987,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 },
                 color: Color3::white(),
                 transparency: 0.0,
+                reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
@@ -1010,6 +1017,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 },
                 color: Color3::white(),
                 transparency: 0.0,
+                reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
@@ -1039,6 +1047,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 },
                 color: Color3::white(),
                 transparency: 0.0,
+                reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
@@ -1068,6 +1077,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 },
                 color: Color3::white(),
                 transparency: 0.0,
+                reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
@@ -1097,6 +1107,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 },
                 color: Color3::white(),
                 transparency: 0.0,
+                reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
@@ -1126,6 +1137,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 },
                 color: Color3::white(),
                 transparency: 0.0,
+                reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),

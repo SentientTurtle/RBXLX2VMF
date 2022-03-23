@@ -76,6 +76,7 @@ pub struct Part<'a> {
     pub cframe: CFrame,
     pub color: Color3,
     pub transparency: f64,
+    pub reflectance: f64,
     pub material: Material,
     pub decals: [Option<Material>; 6],   // 0 = Front =-Z, 1 = Back = +Z, 2 = Top = +Y, 3 Bottom = -Y, 4 Right = +X, 5 = Left = -X
 }
@@ -85,6 +86,7 @@ pub struct PartVisualHash {
     pub is_detail: bool,
     pub color: Color3,
     pub transparency: u64,
+    pub reflectance: u64,
     pub material: MaterialHash,
     pub decals: [Option<MaterialHash>; 6],
 }
@@ -134,6 +136,7 @@ impl<'a> Part<'a> {
                     is_detail: self.is_detail,
                     color: self.color,
                     transparency: self.transparency.to_bits(),
+                    reflectance: self.reflectance.to_bits(),
                     material,
                     decals,
                 })
@@ -285,8 +288,7 @@ pub enum Material {
     Custom {
         texture: &'static str,
         fill: bool,
-        generate: bool,
-        // TODO: Fix this 'main' API leak
+        generate: bool, // TODO: Fix this 'main' API leak
         size_x: f64,
         size_y: f64,
     },
