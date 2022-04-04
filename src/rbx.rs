@@ -335,7 +335,7 @@ impl Material {
 
     pub fn dimension_x(self) -> f64 {
         match self {
-            Material::Plastic => 512.0,
+            Material::Plastic => 32.0,
             Material::Wood => 1024.0,
             Material::Slate => 1024.0,
             Material::Concrete => 1024.0,
@@ -350,7 +350,7 @@ impl Material {
             Material::Pebble => 512.0,
             Material::Sand => 1024.0,
             Material::Fabric => 512.0,
-            Material::SmoothPlastic => 512.0,
+            Material::SmoothPlastic => 32.0,
             Material::Metal => 512.0,
             Material::WoodPlanks => 1024.0,
             Material::Cobblestone => 1024.0,
@@ -363,7 +363,7 @@ impl Material {
 
     pub fn dimension_y(self) -> f64 {
         match self {
-            Material::Plastic => 512.0,
+            Material::Plastic => 32.0,
             Material::Wood => 1024.0,
             Material::Slate => 1024.0,
             Material::Concrete => 1024.0,
@@ -378,7 +378,7 @@ impl Material {
             Material::Pebble => 512.0,
             Material::Sand => 1024.0,
             Material::Fabric => 512.0,
-            Material::SmoothPlastic => 512.0,
+            Material::SmoothPlastic => 32.0,
             Material::Metal => 512.0,
             Material::WoodPlanks => 1024.0,
             Material::Cobblestone => 1024.0,

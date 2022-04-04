@@ -1,9 +1,9 @@
 #![allow(non_camel_case_types)]
 
 use std::io::Write;
-use std::fmt::Display;
 
-pub trait VMFTexture: Display + PartialEq {
+pub trait VMFTexture: PartialEq {
+    fn name(&self) -> String;
     fn scale_x(&self, side: Side) -> f64;
     fn scale_z(&self, side: Side) -> f64;
     fn offset_x(&self, side: Side) -> f64;
@@ -191,7 +191,7 @@ impl<T: Write> VMFBuilder<T> {
                         \t\t\t\"smoothing_groups\" \"0\"\n",
                     side.id,
                     side.plane[0][0], side.plane[0][1], side.plane[0][2], side.plane[1][0], side.plane[1][1], side.plane[1][2], side.plane[2][0], side.plane[2][1], side.plane[2][2],
-                    texture,
+                    texture.name(),
                     side.texture_face.u_axis(), texture.offset_x(side), texture.scale_x(side),
                     side.texture_face.v_axis(), texture.offset_y(side), texture.scale_z(side)
                 )?;
@@ -321,7 +321,7 @@ impl<T: Write> VMFBuilder<T> {
                     \t\t}}\n",
                     side.id,
                     side.plane[0][0], side.plane[0][1], side.plane[0][2], side.plane[1][0], side.plane[1][1], side.plane[1][2], side.plane[2][0], side.plane[2][1], side.plane[2][2],
-                    texture,
+                    texture.name(),
                     side.texture_face.u_axis(), texture.offset_x(side), texture.scale_x(side),
                     side.texture_face.v_axis(), texture.offset_y(side), texture.scale_z(side)
                 )?;

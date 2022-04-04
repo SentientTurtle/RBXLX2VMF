@@ -2,14 +2,13 @@
 #![feature(try_blocks)]
 #![feature(option_result_contains)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use clap::{App, Arg};
 use std::fs::{File, Metadata};
 use std::io::{Read, Write};
 use crate::rbx::{Part, CFrame, Vector3, BoundingBox, Material, Color3, PartType, PartShape};
 use roxmltree::{Document, Node};
 use crate::vmf::{VMFBuilder, Solid, Side, TextureFace, TextureMap, VMFTexture, Displacement};
-use std::fmt::{Display, Formatter};
 use std::path::Path;
 use flate2::read::GzDecoder;
 use image::{EncodableLayout, GenericImageView, ColorType, ImageFormat, DynamicImage, ImageBuffer, Rgba};
@@ -219,12 +218,15 @@ fn main() {
 
                     let texture_input_folder = Path::new(texture_input);
                     let texture_output_folder = Path::new(texture_output);
-                    if let Err(error) = std::fs::create_dir_all(texture_output_folder) {
+                    if let Err(error) = std::fs::create_dir_all(texture_output_folder.join("rbx")) {
                         println!("error: could not create texture output directory {}", error);
                         std::process::exit(-1)
                     }
+
+                    let mut textures_to_copy = HashSet::new();
+
                     for texture in texture_map.into_iter().filter(RobloxTexture::must_generate) {
-                        let image = if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
+                        if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
                             print!("\tdecal: {}...", id);
                             std::io::stdout().flush().unwrap_or_default();
 
@@ -265,94 +267,89 @@ fn main() {
                                 DynamicImage::ImageRgba8(buf)
                             };
                             match result {
-                                Ok(image) => Some(image),
-                                Err(error) => {
-                                    println!("error loading decal: {}", error);
-                                    None
-                                }
-                            }
-                        } else {
-                            let path = texture_input_folder.join(format!("{}", texture.material)).with_extension("png");
-                            print!("\ttexture: {}...", texture);
-                            std::io::stdout().flush().unwrap_or_default();
+                                Ok(image) => {
+                                    let image_out_path = texture_output_folder.join(texture.name())
+                                        .with_extension("png");
 
-                            match image::io::Reader::open(path) {
-                                Ok(image_reader) => {
-                                    match image_reader.decode() {
-                                        Ok(image) => {
-                                            let width = image.width();
-                                            let height = image.height();
-                                            let rgba_image = image.into_rgba8();    // Optimization hack: We're guesstimating the images are RGBA
-                                            let input_buf = rgba_image.as_bytes();
+                                    let width = image.width();
+                                    let height = image.height();
 
-
-                                            let mut output_buf = Vec::with_capacity((width * height * 4) as usize);
-                                            for index in 0..(input_buf.len() / 4) {
-                                                //Note: Material textures are applied as a mask, so direct channel multiplication is used rather than alpha compositing
-                                                let red = input_buf[index * 4 + 0];
-                                                let green = input_buf[index * 4 + 1];
-                                                let blue = input_buf[index * 4 + 2];
-                                                let alpha = input_buf[index * 4 + 3];
-
-                                                let out_red = (texture.color.red as u64 * red as u64 / 255) as u8;
-                                                let out_green = (texture.color.green as u64 * green as u64 / 255) as u8;
-                                                let out_blue = (texture.color.blue as u64 * blue as u64 / 255) as u8;
-                                                let out_alpha = (texture.transparency as u64 * alpha as u64 / 255) as u8;
-
-                                                output_buf.push(out_red);
-                                                output_buf.push(out_green);
-                                                output_buf.push(out_blue);
-                                                output_buf.push(out_alpha);
-                                            }
-                                            Some(DynamicImage::ImageRgba8(ImageBuffer::from_vec(width, height, output_buf).unwrap()))
-                                        }
+                                    match image::save_buffer_with_format(image_out_path, image.into_rgba8().as_bytes(), width, height, ColorType::Rgba8, ImageFormat::Png) {
+                                        Ok(_) => println!(" SAVED"),
                                         Err(error) => {
-                                            println!("error: could not read texture file {}", error);
+                                            println!("error: could not write texture file {}", error);
                                             std::process::exit(-1)
                                         }
                                     }
-                                }
-                                Err(error) => {
-                                    println!("error: could not read texture file {}", error);
-                                    std::process::exit(-1)
-                                }
-                            }
-                        };
-                        if let Some(image) = image {
-                            let image_out_path = texture_output_folder.join(format!("{}_{:x}-{:x}-{:x}-{:x}-{:x}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency, texture.reflectance))
-                                .with_extension("png");
-                            let vmt_out_path = texture_output_folder.join(format!("{}_{:x}-{:x}-{:x}-{:x}-{:x}", texture.material, texture.color.red, texture.color.blue, texture.color.green, texture.transparency, texture.reflectance))
-                                .with_extension("vmt");
 
-                            let width = image.width();
-                            let height = image.height();
+                                    let vmt_out_path = texture_output_folder.join(texture.name()).with_extension("vmt");
 
-                            match image::save_buffer_with_format(image_out_path, image.into_rgba8().as_bytes(), width, height, ColorType::Rgba8, ImageFormat::Png) {
-                                Ok(_) => println!(" SAVED"),
-                                Err(error) => {
-                                    println!("error: could not write texture file {}", error);
-                                    std::process::exit(-1)
+                                    if let Err(error) = File::create(vmt_out_path).and_then(|mut file| try {
+                                        write!(file,
+                                               "\"LightmappedGeneric\"\n\
+                                           {{\n\
+                                           \t$basetexture \"{}\"\n",
+                                               texture.name()
+                                        )?;
+                                        if texture.transparency != 255 {
+                                            write!(file, "\t$translucent 1\n")?;
+                                        }
+                                        if texture.reflectance != 0 {
+                                            write!(file, "\t$envmap env_cubemap\n")?;
+                                            write!(file, "\t$envmaptint \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance = 1.0 / (255.0 / (texture.reflectance as f64)))?;
+                                        }
+                                        write!(file, "}}\n")?;
+                                    }) {
+                                        println!("\t\twarning: could not write VMT: {}", error);
+                                    }
                                 }
+                                Err(error) => println!("error loading decal: {}", error),
                             }
+                        } else {
+                            print!("\ttexture: {}...", texture.name());
+                            std::io::stdout().flush().unwrap_or_default();
+
+                            textures_to_copy.insert(format!("{}", texture.material));
+
+                            let vmt_out_path = texture_output_folder.join(texture.name()).with_extension("vmt");
 
                             if let Err(error) = File::create(vmt_out_path).and_then(|mut file| try {
-                                    write!(file,
-                                           "\"LightmappedGeneric\"\n\
+                                write!(file,
+                                       "\"LightmappedGeneric\"\n\
                                            {{\n\
-                                           \t\"$basetexture\" \"{}\"\n",
-                                           texture
-                                    )?;
+                                           \t$basetexture \"rbx/{}\"\n\
+                                           \t$color \"[{} {} {}]\"\n",
+                                       texture.material,
+                                       ((texture.color.red as f64) / 255.0).powf(2.2),  // Pow for gamma adjustment
+                                       ((texture.color.green as f64) / 255.0).powf(2.2),
+                                       ((texture.color.blue as f64) / 255.0).powf(2.2)
+                                )?;
                                 if texture.transparency != 255 {
-                                    write!(file, "\t\"$translucent\" \"1\"\n")?;
+                                    write!(file, "\t$alpha {}\n", texture.transparency as f64 / 255.0)?;
                                 }
                                 if texture.reflectance != 0 {
-                                    write!(file, "\t\"$envmap\" \"env_cubemap\"\n")?;
-                                    write!(file, "\t\"$envmaptint\" \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance=1.0/(255.0/(texture.reflectance as f64)))?;
+                                    write!(file, "\t$envmap env_cubemap\n")?;
+                                    write!(file, "\t$envmaptint \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance = 1.0 / (255.0 / (texture.reflectance as f64)))?;
                                 }
                                 write!(file, "}}\n")?;
+                                println!(" SAVED");
                             }) {
                                 println!("\t\twarning: could not write VMT: {}", error);
                             }
+                        };
+                    }
+
+                    print!("Copying textures...\n");
+                    std::io::stdout().flush().unwrap_or_default();
+                    for texture in textures_to_copy {
+                        print!("\ttexture: {}...", texture);
+                        std::io::stdout().flush().unwrap_or_default();
+                        let inpath = texture_input_folder.join(format!("{}", texture)).with_extension("png");
+                        let outpath = texture_output_folder.join("rbx").join(format!("{}", texture)).with_extension("png");
+                        if let Err(error) = std::fs::copy(inpath, outpath) {
+                            println!("\t\twarning: could not copy texture file {}: {}", texture, error);
+                        } else {
+                            println!(" COPIED");
                         }
                     }
                 }
@@ -361,7 +358,7 @@ fn main() {
                 println!("error: could not write VMF {}", error);
                 std::process::exit(-1)
             }
-        },
+        }
         Err(error) => {
             println!("error: invalid XML {}", error);
             std::process::exit(-1)
@@ -627,6 +624,10 @@ impl RobloxTexture {
 }
 
 impl VMFTexture for RobloxTexture {
+    fn name(&self) -> String {
+        format!("rbx/{}_{:x}-{:x}-{:x}-{:x}-{:x}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency, self.reflectance)
+    }
+
     fn scale_x(&self, side: Side) -> f64 {
         match self.scale {
             TextureScale::FILL => (Vector3::from_array(side.plane[2]) - Vector3::from_array(side.plane[1])).magnitude() / self.dimension_x,
@@ -663,20 +664,6 @@ impl VMFTexture for RobloxTexture {
             TextureFace::Y_NEG => -side.plane[2][0]
         };
         (position / self.scale_z(side)) % self.dimension_y
-    }
-}
-
-impl Display for RobloxTexture {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        if let Material::Custom { texture, generate, .. } = self.material {
-            if !generate {
-                write!(f, "{}", texture)
-            } else {
-                write!(f, "rbx/{}_{:x}-{:x}-{:x}-{:x}-{:x}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency, self.reflectance)
-            }
-        } else {
-            write!(f, "rbx/{}_{:x}-{:x}-{:x}-{:x}-{:x}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency, self.reflectance)
-        }
     }
 }
 
@@ -763,10 +750,10 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
                     reflectance: (255.0 * part.reflectance) as u8,
                     scale: match side_decal {
                         Material::Decal { .. } | Material::Custom { fill: true, .. } => TextureScale::FILL,
-                        Material::Texture { size_x, size_y, studs_per_u, studs_per_v,  .. } => {
+                        Material::Texture { size_x, size_y, studs_per_u, studs_per_v, .. } => {
                             TextureScale::FIXED {
                                 scale_x: map_scale * studs_per_u / size_x,
-                                scale_z: map_scale * studs_per_v / size_y
+                                scale_z: map_scale * studs_per_v / size_y,
                             }
                         }
                         _ => TextureScale::FIXED { scale_x: map_scale / 32.0, scale_z: map_scale / 32.0 },
