@@ -1,10 +1,284 @@
-use crate::{BoundingBox, CFrame, Color3, Displacement, Material, Part, PartShape, PartType, RobloxTexture, Side, Solid, TextureFace, TextureMap, TextureScale, Vector3};
-
 pub mod parse;
 pub mod texture;
 
+use std::hint::unreachable_unchecked;
+use std::io;
+use std::io::{Write};
+use image::{ImageFormat};
+use roxmltree::Document;
+use crate::conv::texture::RobloxTexture;
+use crate::rbx::{BoundingBox, Material, Part, PartShape};
+use crate::vmf::{Solid, TextureMap, VMFBuilder, VMFTexture};
+use crate::rbx::{Vector3, CFrame, PartType, Color3};
+use crate::conv::texture::TextureScale;
+use crate::vmf::{Side, TextureFace, Displacement};
+
+
+const MAX_PART_COUNT: usize = 32768;    // VMF format limitations
+const ID_BLOCK_SIZE: u32 = 35000;
+
+pub trait ConvertOptions<W: Write> {
+    fn input_name(&self) -> &str;
+    fn read_input_data(&self) -> String;
+
+    fn vmf_output(&self) -> W;
+    fn texture_output(&self, path: &str) -> W;
+    fn texture_output_enabled(&self) -> bool;
+
+    fn map_scale(&self) -> f64;
+    fn auto_skybox_enabled(&self) -> bool;
+    fn skybox_clearance(&self) -> f64;
+    fn optimization_enabled(&self) -> bool;
+
+    fn decal_size(&self) -> u64;
+}
+
+pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
+    println!("Converting {}", options.input_name());
+    println!("Using map scale: {}×", options.map_scale());
+    println!("Auto-skybox [{}]", if options.auto_skybox_enabled() { "ENABLED" } else { "DISABLED" });
+    println!("Part-count optimization [{}]", if options.optimization_enabled() { "ENABLED" } else { "DISABLED" });
+    println!();
+
+    print!("Reading input...    ");    // We need to flush print! manually, as it is usually line-buffered.
+    std::io::stdout().flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
+    println!("DONE");
+
+    print!("Parsing XML...      ");
+    std::io::stdout().flush().unwrap_or_default();
+    match Document::parse(options.read_input_data().as_str()) {
+        Ok(document) => {
+            let mut parts = Vec::new();
+            parse::parse_xml(document.root_element(), &mut parts, false, options.decal_size());
+            println!("{} parts found!", parts.len());
+
+            if options.optimization_enabled() {
+                print!("Optimizing...       ");
+                std::io::stdout().flush().unwrap_or_default();
+                let old_count = parts.len();
+                parts = Part::join_adjacent(parts, true);
+                println!("\nReduced part count to {} (-{})", parts.len(), old_count - parts.len());
+            }
+
+            if parts.len() > MAX_PART_COUNT {
+                println!("error: Too many parts, found: {} parts, must be fewer than {}", parts.len(), MAX_PART_COUNT + 1);
+                std::process::exit(-1)
+            }
+
+            // Hack: Source engine does not support surface-displacement on detail
+            parts.iter_mut().for_each(|part| if part.shape != PartShape::Block { part.is_detail = false });
+
+            let result: std::io::Result<()> = try {
+                let mut part_id = ID_BLOCK_SIZE * 0;    // IDs split into blocks to avoid overlap
+                let mut side_id = ID_BLOCK_SIZE * 1;
+                let mut entity_id = ID_BLOCK_SIZE * 2;
+
+                let mut bounding_box = parts.iter()
+                    .copied()
+                    .fold(BoundingBox::zeros(), BoundingBox::include);
+
+                let mut texture_map = TextureMap::new();
+
+                print!("Writing VMF...      ");
+                std::io::stdout().flush().unwrap_or_default();
+
+                let mut world_solids = Vec::with_capacity(parts.len());
+                let mut detail_solids = Vec::new();
+
+                parts.iter()
+                    .filter(|part| !part.is_detail)
+                    .map(|part| {
+                        Solid {
+                            id: {
+                                part_id += 1;
+                                part_id
+                            },
+                            sides: decompose_part(*part, &mut side_id, options.map_scale(), &mut texture_map),
+                        }
+                    })
+                    .for_each(|s| world_solids.push(s));
+
+                parts.iter()
+                    .filter(|part| part.is_detail)
+                    .map(|part| {
+                        (
+                            {
+                                entity_id += 1;
+                                entity_id
+                            },
+                            Solid {
+                                id: {
+                                    part_id += 1;
+                                    part_id
+                                },
+                                sides: decompose_part(*part, &mut side_id, options.map_scale(), &mut texture_map),
+                            }
+                        )
+                    })
+                    .for_each(|s| detail_solids.push(s));
+
+                if options.auto_skybox_enabled() {
+                    bounding_box.y_max += options.skybox_clearance();
+                    world_solids.extend(generate_skybox(&mut part_id, &mut side_id, bounding_box, options.map_scale(), &mut texture_map));
+                }
+
+                VMFBuilder(options.vmf_output())
+                    .version_info(400, 3325, 0, false)? // Defaults from https://developer.valvesoftware.com/wiki/Valve_Map_Format
+                    .visgroups()?
+                    .viewsettings()?
+                    .world(0, "sky_tf2_04", world_solids, &texture_map)?
+                    .detail(detail_solids, &texture_map)?
+                    .flush()?;
+                println!("DONE");
+
+                if options.texture_output_enabled() {
+                    print!("Writing textures...\n");
+                    std::io::stdout().flush().unwrap_or_default();
+
+                    let mut textures_to_copy = Vec::new();  // We don't want to hash Material, and the low amount of entries in this Vec makes checking pretty fast.
+
+                    for texture in texture_map.into_iter().filter(RobloxTexture::must_generate) {
+                        if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
+                            print!("\tdecal: {}...", id);
+                            std::io::stdout().flush().unwrap_or_default();
+                            match texture::fetch_texture(id, texture, texture.dimension_x as u32, texture.dimension_y as u32) {
+                                Ok(image) => {
+
+                                    let image_out_path = format!("{}.png", texture.name());
+                                    match image.write_to(&mut options.texture_output(&*image_out_path), ImageFormat::Png) {
+                                        Ok(_) => println!(" SAVED"),
+                                        Err(error) => {
+                                            println!("error: could not write texture file {}", error);
+                                            std::process::exit(-1)
+                                        }
+                                    }
+
+                                    let vmt_out_path = format!("{}.vmt", texture.name());
+                                    let mut file = options.texture_output(&*vmt_out_path);
+                                    let result: Result<(), io::Error> = try {
+                                        write!(file,
+                                               "\"LightmappedGeneric\"\n\
+                                           {{\n\
+                                           \t$basetexture \"{}\"\n",
+                                               texture.name()
+                                        )?;
+                                        if texture.transparency != 255 {
+                                            write!(file, "\t$translucent 1\n")?;
+                                        }
+                                        if texture.reflectance != 0 {
+                                            write!(file, "\t$envmap env_cubemap\n")?;
+                                            write!(file, "\t$envmaptint \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance = 1.0 / (255.0 / (texture.reflectance as f64)))?;
+                                        }
+                                        write!(file, "}}\n")?;
+                                    };
+                                    if let Err(error) = result {
+                                        println!("\t\twarning: could not write VMT: {}", error);
+                                    }
+                                }
+                                Err(error) => println!("error loading decal: {}", error),
+                            }
+                        } else {
+                            print!("\ttexture: {}...", texture.name());
+                            std::io::stdout().flush().unwrap_or_default();
+
+                            if !(textures_to_copy.contains(&texture.material)) {
+                                debug_assert!(!(matches!(texture.material, Material::Decal { .. }) && matches!(texture.material, Material::Texture { .. })));
+                                textures_to_copy.push(texture.material);
+                            }
+
+                            let vmt_out_path = format!("{}.vmt", texture.name());
+                            let mut file = options.texture_output(&*vmt_out_path);
+                            let result: Result<(), io::Error> = try {
+                                write!(file,
+                                       "\"LightmappedGeneric\"\n\
+                                           {{\n\
+                                           \t$basetexture \"rbx/{}\"\n\
+                                           \t$color \"[{} {} {}]\"\n",
+                                       texture.material,
+                                       ((texture.color.red as f64) / 255.0).powf(2.2),  // Pow for gamma adjustment
+                                       ((texture.color.green as f64) / 255.0).powf(2.2),
+                                       ((texture.color.blue as f64) / 255.0).powf(2.2)
+                                )?;
+                                if texture.transparency != 255 {
+                                    write!(file, "\t$alpha {}\n", texture.transparency as f64 / 255.0)?;
+                                }
+                                if texture.reflectance != 0 {
+                                    write!(file, "\t$envmap env_cubemap\n")?;
+                                    write!(file, "\t$envmaptint \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance = 1.0 / (255.0 / (texture.reflectance as f64)))?;
+                                }
+                                write!(file, "}}\n")?;
+                                println!(" SAVED");
+                            };
+                            if let Err(error) = result {
+                                println!("\t\twarning: could not write VMT: {}", error);
+                            }
+                        };
+                    }
+
+                    print!("Copying textures...\n");
+                    std::io::stdout().flush().unwrap_or_default();
+                    for texture in textures_to_copy {
+                        print!("\ttexture: {}...", texture);
+                        std::io::stdout().flush().unwrap_or_default();
+
+                        let bytes = match texture {
+                            Material::Plastic => crate::rbx::textures::PLASTIC,
+                            Material::Wood => crate::rbx::textures::WOOD,
+                            Material::Slate => crate::rbx::textures::SLATE,
+                            Material::Concrete => crate::rbx::textures::CONCRETE,
+                            Material::CorrodedMetal => crate::rbx::textures::RUST,
+                            Material::DiamondPlate => crate::rbx::textures::DIAMONDPLATE,
+                            Material::Foil => crate::rbx::textures::ALUMINIUM,
+                            Material::Grass => crate::rbx::textures::GRASS,
+                            Material::Ice => crate::rbx::textures::ICE,
+                            Material::Marble => crate::rbx::textures::MARBLE,
+                            Material::Granite => crate::rbx::textures::GRANITE,
+                            Material::Brick => crate::rbx::textures::BRICK,
+                            Material::Pebble => crate::rbx::textures::PEBBLE,
+                            Material::Sand => crate::rbx::textures::SAND,
+                            Material::Fabric => crate::rbx::textures::FABRIC,
+                            Material::SmoothPlastic => crate::rbx::textures::SMOOTHPLASTIC,
+                            Material::Metal => crate::rbx::textures::METAL,
+                            Material::WoodPlanks => crate::rbx::textures::WOODPLANKS,
+                            Material::Cobblestone => crate::rbx::textures::COBBLESTONE,
+                            Material::Glass => crate::rbx::textures::GLASS,
+                            Material::ForceField => crate::rbx::textures::FORCEFIELD,
+                            Material::Custom { texture: "decal", .. } => crate::rbx::textures::DECAL,
+                            Material::Custom { texture: "studs", .. } => crate::rbx::textures::STUDS,
+                            Material::Custom { texture: "inlet", .. } => crate::rbx::textures::INLET,
+                            Material::Custom { texture: "spawnlocation", .. } => crate::rbx::textures::SPAWNLOCATION,
+                            Material::Custom { .. } => {
+                                println!(" SKIPPED");
+                                continue;
+                            }
+                            Material::Decal { .. } => unsafe { unreachable_unchecked() },
+                            Material::Texture { .. } => unsafe { unreachable_unchecked() },
+                        };
+
+                        let texture_path = format!("{}.png", texture);
+                        let mut file = options.texture_output(&*texture_path);
+                        if let Err(error) = file.write_all(bytes) {
+                            println!("\t\twarning: could not copy texture file {}: {}", texture, error);
+                        } else {
+                            println!(" COPIED");
+                        }
+                    }
+                }
+            };
+            if let Err(error) = result {
+                println!("error: could not write VMF {}", error);
+                std::process::exit(-1)
+            }
+        }
+        Err(error) => {
+            println!("error: invalid XML {}", error);
+            std::process::exit(-1)
+        }
+    }
+}
+
 /// Converts roblox coordinates to source engine coordinates
-pub fn to_source_coordinates(vector: Vector3) -> [f64; 3] {
+fn to_source_coordinates(vector: Vector3) -> [f64; 3] {
     [
         vector.x,
         -vector.z, // Negation corrects for mirroring in hammer/VMF
@@ -13,7 +287,7 @@ pub fn to_source_coordinates(vector: Vector3) -> [f64; 3] {
 }
 
 /// Decomposes a Roblox part into it's polyhedron faces, and returns them as source engine Sides
-pub fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut TextureMap<RobloxTexture>) -> Vec<Side> {
+fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut TextureMap<RobloxTexture>) -> Vec<Side> {
     let vertices = part.vertices();
 
     const DECAL_FRONT: usize = 5;
@@ -97,8 +371,8 @@ pub fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mu
                         Material::Decal { .. } | Material::Custom { fill: true, .. } => TextureScale::FILL,
                         Material::Texture { size_x, size_y, studs_per_u, studs_per_v, .. } => {
                             TextureScale::FIXED {
-                                scale_x: map_scale * studs_per_u / size_x,
-                                scale_z: map_scale * studs_per_v / size_y,
+                                scale_x: map_scale * studs_per_u / (size_x as f64),
+                                scale_z: map_scale * studs_per_v / (size_y as f64),
                             }
                         }
                         _ => TextureScale::FIXED { scale_x: map_scale / 32.0, scale_z: map_scale / 32.0 },
@@ -282,9 +556,7 @@ pub fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mu
     sides
 }
 
-
-
-pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingBox, map_scale: f64, texture_map: &mut TextureMap<RobloxTexture>) -> [Solid; 6] {
+fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingBox, map_scale: f64, texture_map: &mut TextureMap<RobloxTexture>) -> [Solid; 6] {
     [
         Solid {
             id: {
@@ -312,7 +584,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 color: Color3::white(),
                 transparency: 0.0,
                 reflectance: 0.0,
-                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
@@ -342,7 +614,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 color: Color3::white(),
                 transparency: 0.0,
                 reflectance: 0.0,
-                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
@@ -372,7 +644,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 color: Color3::white(),
                 transparency: 0.0,
                 reflectance: 0.0,
-                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
@@ -402,7 +674,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 color: Color3::white(),
                 transparency: 0.0,
                 reflectance: 0.0,
-                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
@@ -432,7 +704,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 color: Color3::white(),
                 transparency: 0.0,
                 reflectance: 0.0,
-                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         },
@@ -462,7 +734,7 @@ pub fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: Bound
                 color: Color3::white(),
                 transparency: 0.0,
                 reflectance: 0.0,
-                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512.0, size_y: 512.0 },
+                material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
             }, side_id, map_scale, texture_map),
         }

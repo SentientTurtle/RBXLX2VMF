@@ -1,9 +1,12 @@
+extern crate reqwest;
+
 use std::collections::HashMap;
 use std::io::Read;
 use flate2::read::GzDecoder;
 use image::{DynamicImage, EncodableLayout, GenericImageView, ImageBuffer, ImageFormat, Rgba};
 use image::imageops::FilterType;
-use crate::{Color3, Material, Side, TextureFace, Vector3, VMFTexture};
+use crate::rbx::{Color3, Vector3, Material};
+use crate::vmf::{Side, TextureFace, VMFTexture};
 
 #[derive(PartialEq, Copy, Clone)]
 pub enum TextureScale {
@@ -18,8 +21,8 @@ pub struct RobloxTexture {
     pub transparency: u8,
     pub reflectance: u8,
     pub scale: TextureScale,
-    pub dimension_x: f64,
-    pub dimension_y: f64,
+    pub dimension_x: u64,
+    pub dimension_y: u64,
 }
 
 impl RobloxTexture {
@@ -33,19 +36,23 @@ impl RobloxTexture {
 
 impl VMFTexture for RobloxTexture {
     fn name(&self) -> String {
-        format!("rbx/{}_{:x}-{:x}-{:x}-{:x}-{:x}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency, self.reflectance)
+        if let Material::Custom { texture, generate: false , ..} = self.material {
+            format!("{}", texture)
+        } else {
+            format!("rbx/{}_{:x}-{:x}-{:x}-{:x}-{:x}", self.material, self.color.red, self.color.blue, self.color.green, self.transparency, self.reflectance)
+        }
     }
 
     fn scale_x(&self, side: Side) -> f64 {
         match self.scale {
-            TextureScale::FILL => (Vector3::from_array(side.plane[2]) - Vector3::from_array(side.plane[1])).magnitude() / self.dimension_x,
+            TextureScale::FILL => (Vector3::from_array(side.plane[2]) - Vector3::from_array(side.plane[1])).magnitude() / (self.dimension_x as f64),
             TextureScale::FIXED { scale_x, .. } => scale_x
         }
     }
 
     fn scale_z(&self, side: Side) -> f64 {
         match self.scale {
-            TextureScale::FILL => (Vector3::from_array(side.plane[2]) - Vector3::from_array(side.plane[0])).magnitude() / self.dimension_y,
+            TextureScale::FILL => (Vector3::from_array(side.plane[2]) - Vector3::from_array(side.plane[0])).magnitude() / (self.dimension_y as f64),
             TextureScale::FIXED { scale_z, .. } => scale_z
         }
     }
@@ -59,7 +66,7 @@ impl VMFTexture for RobloxTexture {
             TextureFace::Y_POS => -side.plane[2][1],
             TextureFace::Y_NEG => side.plane[2][1]
         };
-        (position / self.scale_x(side)) % self.dimension_x
+        (position / self.scale_x(side)) % (self.dimension_x as f64)
     }
 
     fn offset_y(&self, side: Side) -> f64 {
@@ -71,7 +78,7 @@ impl VMFTexture for RobloxTexture {
             TextureFace::Y_POS => -side.plane[2][0],
             TextureFace::Y_NEG => -side.plane[2][0]
         };
-        (position / self.scale_z(side)) % self.dimension_y
+        (position / self.scale_z(side)) % (self.dimension_y as f64)
     }
 }
 

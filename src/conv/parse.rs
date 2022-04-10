@@ -1,5 +1,5 @@
 use roxmltree::Node;
-use crate::{CFrame, Color3, Material, Part, PartShape, PartType, ROBLOX_DECAL_MAX_HEIGHT, ROBLOX_DECAL_MAX_WIDTH, Vector3};
+use crate::rbx::{Part, Color3, PartShape, Material, PartType, Vector3, CFrame};
 
 /// Convenience trait; Provides methods for searching for specific children of a node
 pub trait NodeExtensions<'a> {
@@ -33,7 +33,7 @@ impl<'a, 'input> NodeExtensions<'a> for Node<'a, 'input> {
 
 /// Recursively parses XML
 /// Expects machine-generated RBXLX files as input, and skips any malformed items.
-pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: bool) {
+pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: bool, decal_size: u64) {
     match node.attribute("class") {
         Some(class @ "Part") | Some(class @ "SpawnLocation") | Some(class @ "TrussPart") => {
             let option: Option<()> = try {
@@ -90,8 +90,8 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                 fn decal_for_side(properties: Node, decals: &mut [Option<Material>; 6], side_name: &str, side_enum: usize) {
                     if let Some(surface) = properties.get_child_with_attribute("token", "name", side_name).and_then(|node| node.text()) {
                         let decal = match surface.parse() {
-                            Ok(3u8) => Some(Material::Custom { texture: "studs", fill: false, generate: true, size_x: 32.0, size_y: 32.0 }),    // Studs,    TODO: other surfaces
-                            Ok(4u8) => Some(Material::Custom { texture: "inlet", fill: false, generate: true, size_x: 32.0, size_y: 32.0 }),    // Inlet,
+                            Ok(3u8) => Some(Material::Custom { texture: "studs", fill: false, generate: true, size_x: 32, size_y: 32 }),    // Studs,    TODO: other surfaces
+                            Ok(4u8) => Some(Material::Custom { texture: "inlet", fill: false, generate: true, size_x: 32, size_y: 32 }),    // Inlet,
                             _ => None
                         };
                         decals[side_enum] = decal;
@@ -120,9 +120,9 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                     .for_each(|(face, texture)| {
                         if face < 6 {
                             if let Some(id) = texture.split_once("?id=").and_then(|(_, id)| id.parse::<u64>().ok()) {
-                                decals[face as usize] = Some(Material::Decal { id, size_x: ROBLOX_DECAL_MAX_WIDTH as f64, size_y: ROBLOX_DECAL_MAX_HEIGHT as f64 })
+                                decals[face as usize] = Some(Material::Decal { id, size_x: decal_size, size_y: decal_size })
                             } else {
-                                decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32.0, size_y: 32.0 })
+                                decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32, size_y: 32 })
                             }
                         }
                     });
@@ -147,15 +147,15 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                     .for_each(|(face, texture, studs_per_u, studs_per_v, offset_u, offset_v)| {
                         if face < 6 {
                             if let Some(id) = texture.split_once("?id=").and_then(|(_, id)| id.parse::<u64>().ok()) {
-                                decals[face as usize] = Some(Material::Texture { id, size_x: ROBLOX_DECAL_MAX_WIDTH as f64, size_y: ROBLOX_DECAL_MAX_HEIGHT as f64, studs_per_u, studs_per_v, offset_u, offset_v })
+                                decals[face as usize] = Some(Material::Texture { id, size_x: decal_size, size_y: decal_size, studs_per_u, studs_per_v, offset_u, offset_v })
                             } else {
-                                decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32.0, size_y: 32.0 })
+                                decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32, size_y: 32 })
                             }
                         }
                     });
 
                 if class == "SpawnLocation" {
-                    decals[DECAL_TOP] = Some(Material::Custom { texture: "spawnlocation", fill: true, generate: true, size_x: 256.0, size_y: 256.0 })
+                    decals[DECAL_TOP] = Some(Material::Custom { texture: "spawnlocation", fill: true, generate: true, size_x: 256, size_y: 256 })
                 }
 
                 let part_type = match class {
@@ -217,7 +217,7 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                         });
 
                 for child in node.children() {
-                    parse_xml(child, parts, is_model_detail)
+                    parse_xml(child, parts, is_model_detail, decal_size)
                 }
             };
             if option.is_none() {
@@ -226,7 +226,7 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
         }
         _ => {
             for child in node.children() {
-                parse_xml(child, parts, is_detail)
+                parse_xml(child, parts, is_detail, decal_size)
             }
         }
     }

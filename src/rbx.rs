@@ -3,6 +3,34 @@ use std::fmt::{Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Sub, Mul, Div, AddAssign, SubAssign};
 
+pub mod textures {
+    pub const ALUMINIUM: &'static [u8] = include_bytes!("../textures/aluminium.png");
+    pub const BRICK: &'static [u8] = include_bytes!("../textures/brick.png");
+    pub const COBBLESTONE: &'static [u8] = include_bytes!("../textures/cobblestone.png");
+    pub const CONCRETE: &'static [u8] = include_bytes!("../textures/concrete.png");
+    pub const DECAL: &'static [u8] = include_bytes!("../textures/decal.png");
+    pub const DIAMONDPLATE: &'static [u8] = include_bytes!("../textures/diamondplate.png");
+    pub const FABRIC: &'static [u8] = include_bytes!("../textures/fabric.png");
+    pub const FORCEFIELD: &'static [u8] = include_bytes!("../textures/forcefield.png");
+    pub const GLASS: &'static [u8] = include_bytes!("../textures/glass.png");
+    pub const GRANITE: &'static [u8] = include_bytes!("../textures/granite.png");
+    pub const GRASS: &'static [u8] = include_bytes!("../textures/grass.png");
+    pub const ICE: &'static [u8] = include_bytes!("../textures/ice.png");
+    pub const INLET: &'static [u8] = include_bytes!("../textures/inlet.png");
+    pub const MARBLE: &'static [u8] = include_bytes!("../textures/marble.png");
+    pub const METAL: &'static [u8] = include_bytes!("../textures/metal.png");
+    pub const PEBBLE: &'static [u8] = include_bytes!("../textures/pebble.png");
+    pub const PLASTIC: &'static [u8] = include_bytes!("../textures/plastic.png");
+    pub const RUST: &'static [u8] = include_bytes!("../textures/rust.png");
+    pub const SAND: &'static [u8] = include_bytes!("../textures/sand.png");
+    pub const SLATE: &'static [u8] = include_bytes!("../textures/slate.png");
+    pub const SMOOTHPLASTIC: &'static [u8] = include_bytes!("../textures/smoothplastic.png");
+    pub const SPAWNLOCATION: &'static [u8] = include_bytes!("../textures/spawnlocation.png");
+    pub const STUDS: &'static [u8] = include_bytes!("../textures/studs.png");
+    pub const WOOD: &'static [u8] = include_bytes!("../textures/wood.png");
+    pub const WOODPLANKS: &'static [u8] = include_bytes!("../textures/woodplanks.png");
+}
+
 /// Struct to represent Roblox Models
 #[derive(Debug)]
 pub struct Model<'a> {
@@ -282,15 +310,16 @@ pub enum Material {
     Metal,
     WoodPlanks,
     Cobblestone,
+    Glass,
     ForceField,
-    Decal { id: u64, size_x: f64, size_y: f64 },
-    Texture { id: u64, size_x: f64, size_y: f64, studs_per_u: f64, studs_per_v: f64, offset_u: f64, offset_v: f64 },
+    Decal { id: u64, size_x: u64, size_y: u64 },
+    Texture { id: u64, size_x: u64, size_y: u64, studs_per_u: f64, studs_per_v: f64, offset_u: f64, offset_v: f64 },
     Custom {
         texture: &'static str,
         fill: bool,
         generate: bool, // TODO: Fix this 'main' API leak
-        size_x: f64,
-        size_y: f64,
+        size_x: u64,
+        size_y: u64,
     },
 }
 
@@ -324,65 +353,68 @@ impl Material {
             864 => Some(Pebble),
             1296 => Some(Sand),
             1312 => Some(Fabric),
-            272 => Some(SmoothPlastic),
+            272 | 288 => Some(SmoothPlastic),
             1088 => Some(Metal),
             528 => Some(WoodPlanks),
             880 => Some(Cobblestone),
+            1568 => Some(Glass),
             1584 => Some(ForceField),
             _ => None
         }
     }
 
-    pub fn dimension_x(self) -> f64 {
+    pub fn dimension_x(self) -> u64 {
         match self {
-            Material::Plastic => 32.0,
-            Material::Wood => 1024.0,
-            Material::Slate => 1024.0,
-            Material::Concrete => 1024.0,
-            Material::CorrodedMetal => 1024.0,
-            Material::DiamondPlate => 512.0,
-            Material::Foil => 512.0,
-            Material::Grass => 1024.0,
-            Material::Ice => 1024.0,
-            Material::Marble => 1024.0,
-            Material::Granite => 1024.0,
-            Material::Brick => 1024.0,
-            Material::Pebble => 512.0,
-            Material::Sand => 1024.0,
-            Material::Fabric => 512.0,
-            Material::SmoothPlastic => 32.0,
-            Material::Metal => 512.0,
-            Material::WoodPlanks => 1024.0,
-            Material::Cobblestone => 1024.0,
-            Material::ForceField => 1024.0,
+            Material::Plastic => 32,
+            Material::Wood => 1024,
+            Material::Slate => 1024,
+            Material::Concrete => 1024,
+            Material::CorrodedMetal => 1024,
+            Material::DiamondPlate => 512,
+            Material::Foil => 512,
+            Material::Grass => 1024,
+            Material::Ice => 1024,
+            Material::Marble => 1024,
+            Material::Granite => 1024,
+            Material::Brick => 1024,
+            Material::Pebble => 512,
+            Material::Sand => 1024,
+            Material::Fabric => 512,
+            Material::SmoothPlastic => 32,
+            Material::Metal => 512,
+            Material::WoodPlanks => 1024,
+            Material::Cobblestone => 1024,
+            Material::Glass => 512,
+            Material::ForceField => 1024,
             Material::Decal { size_x, .. } => size_x,
             Material::Texture { size_x, .. } => size_x,
             Material::Custom { size_x, .. } => size_x,
         }
     }
 
-    pub fn dimension_y(self) -> f64 {
+    pub fn dimension_y(self) -> u64 {
         match self {
-            Material::Plastic => 32.0,
-            Material::Wood => 1024.0,
-            Material::Slate => 1024.0,
-            Material::Concrete => 1024.0,
-            Material::CorrodedMetal => 1024.0,
-            Material::DiamondPlate => 512.0,
-            Material::Foil => 512.0,
-            Material::Grass => 1024.0,
-            Material::Ice => 1024.0,
-            Material::Marble => 1024.0,
-            Material::Granite => 1024.0,
-            Material::Brick => 1024.0,
-            Material::Pebble => 512.0,
-            Material::Sand => 1024.0,
-            Material::Fabric => 512.0,
-            Material::SmoothPlastic => 32.0,
-            Material::Metal => 512.0,
-            Material::WoodPlanks => 1024.0,
-            Material::Cobblestone => 1024.0,
-            Material::ForceField => 1024.0,
+            Material::Plastic => 32,
+            Material::Wood => 1024,
+            Material::Slate => 1024,
+            Material::Concrete => 1024,
+            Material::CorrodedMetal => 1024,
+            Material::DiamondPlate => 512,
+            Material::Foil => 512,
+            Material::Grass => 1024,
+            Material::Ice => 1024,
+            Material::Marble => 1024,
+            Material::Granite => 1024,
+            Material::Brick => 1024,
+            Material::Pebble => 512,
+            Material::Sand => 1024,
+            Material::Fabric => 512,
+            Material::SmoothPlastic => 32,
+            Material::Metal => 512,
+            Material::WoodPlanks => 1024,
+            Material::Cobblestone => 1024,
+            Material::Glass => 512,
+            Material::ForceField => 1024,
             Material::Decal { size_y, .. } => size_y,
             Material::Texture { size_y, .. } => size_y,
             Material::Custom { size_y, .. } => size_y
@@ -410,16 +442,13 @@ impl Material {
             Material::Metal => Some(MaterialHash::Regular(1088)),
             Material::WoodPlanks => Some(MaterialHash::Regular(528)),
             Material::Cobblestone => Some(MaterialHash::Regular(880)),
+            Material::Glass => Some(MaterialHash::Regular(1568)),
             Material::ForceField => Some(MaterialHash::Regular(1584)),
             Material::Decal { .. } => None,
             Material::Texture { .. } => None,
             Material::Custom { texture, fill, size_x, size_y, .. } => {
                 if !fill {
-                    Some(MaterialHash::Custom {
-                        texture,
-                        size_x: size_x.to_bits(),
-                        size_y: size_y.to_bits(),
-                    })
+                    Some(MaterialHash::Custom { texture, size_x, size_y, })
                 } else {
                     None
                 }
@@ -450,6 +479,7 @@ impl Display for Material {
             Material::Metal => write!(f, "metal"),
             Material::WoodPlanks => write!(f, "woodplanks"),
             Material::Cobblestone => write!(f, "cobblestone"),
+            Material::Glass => write!(f, "glass"),
             Material::ForceField => write!(f, "forcefield"),
             Material::Custom { texture, .. } => write!(f, "{}", texture),
             Material::Decal { id, .. } => write!(f, "decal_{}", id),
