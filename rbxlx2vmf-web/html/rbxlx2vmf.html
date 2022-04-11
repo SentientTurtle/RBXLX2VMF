@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 3em;
+            margin: 1em;
+            color: #f0f0f0;
+            background: #2a4b45;
+        }
+
+        #title {
+            font-family: Arial, sans-serif;
+            font-size: 3em;
+            background: #203131;
+            padding: 0.33em;
+            border-radius: 0.5em;
+        }
+
+        #form {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5em;
+            padding: 1em;
+            background: #203131;
+            border-radius: 0.5em;
+        }
+
+        .div-gap {
+            display: flex;
+            flex-direction: row;
+            gap: 0.5em;
+        }
+
+        input[type=number] {
+            width: 3em;
+        }
+    </style>
+</head>
+<body>
+<script type="module">
+    import {convert_map, default as init} from './rbxlx2vmf_web.js';
+
+    async function run() {
+        await init('./rbxlx2vmf_web_bg.wasm');
+
+        // make the function available to the browser
+        window.convert_map = convert_map;
+    }
+
+    document.getElementById("convert-button").addEventListener("click", function () {
+        if (document.getElementById("input_data").files.length === 0) {  // Ignore if no file selected
+            return
+        }
+        let is_texture_output_enabled = document.getElementById("is_texture_output_enabled").checked;
+        let map_scale = document.getElementById("map_scale").value;
+        let auto_skybox_enabled = document.getElementById("auto_skybox_enabled").checked;
+        let skybox_clearance = document.getElementById("skybox_clearance").value;
+        let optimization_enabled = document.getElementById("optimization_enabled").checked;
+
+        let reader = new FileReader();
+        reader.onload = function (file) {
+            convert_map('map.vmf', file.target.result, is_texture_output_enabled, map_scale, auto_skybox_enabled, skybox_clearance, optimization_enabled)
+                .then((zip_data) => {
+                    const blob = new Blob([zip_data], {type: 'application/zip'});
+
+                    if (window.navigator.msSaveOrOpenBlob) {
+                        window.navigator.msSaveBlob(blob, "Map.zip");
+                    } else {
+                        const elem = window.document.createElement('a');
+                        let objurl = window.URL.createObjectURL(blob);
+                        elem.href = objurl;
+                        elem.download = "Map.zip";
+                        document.body.appendChild(elem);
+                        elem.click();
+                        document.body.removeChild(elem);
+                        URL.revokeObjectURL(objurl)
+                    }
+                })
+        }
+        reader.readAsText(document.getElementById("input_data").files[0])
+    });
+
+    run();
+</script>
+<div id="title">
+    <header><b>Roblox to Source Engine Map Converter</b></header>
+</div>
+<div id="form-box">
+    <form id="form" onSubmit="return false">
+        <div class="div-gap">
+            <label for="input_data">Roblox file:</label>
+            <input type="file" id="input_data" accept=".rbxlx" required="required">
+        </div>
+        <div class="div-gap">
+            <label for="map_scale">Map scale (hu/stud):</label>
+            <input type="number" id="map_scale" name="map_scale" value="15.0" step="0.1">
+        </div>
+        <div>
+            <input type="checkbox" id="is_texture_output_enabled" name="is_texture_output_enabled" checked>
+            <label for="is_texture_output_enabled">Generate Textures</label>
+        </div>
+        <div>
+            <div>
+                <input type="checkbox" id="auto_skybox_enabled" name="auto_skybox_enabled" checked>
+                <label for="auto_skybox_enabled">Generate skybox</label>
+            </div>
+            <div class="div-gap">
+                <label for="skybox_clearance">Extra skybox vertical clearance:</label>
+                <input type="number" id="skybox_clearance" name="skybox_clearance" value="0.0" step="10" min="0">
+            </div>
+        </div>
+        <div>
+            <input type="checkbox" id="optimization_enabled" name="optimization_enabled">
+            <label for="optimization_enabled">Enable part-count optimization.<br>(WARNING: Significantly increases processing time on larger maps)</label>
+        </div>
+        <div>
+            <input id="convert-button" type="submit" value="Convert">
+        </div>
+    </form>
+</div>
+</body>
+<html>

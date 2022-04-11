@@ -1,10 +1,9 @@
 pub mod parse;
 pub mod texture;
 
-use std::hint::unreachable_unchecked;
 use std::io;
-use std::io::{Write};
-use image::{ImageFormat};
+use std::io::{Read, Write};
+use image::{EncodableLayout, ImageFormat};
 use roxmltree::Document;
 use crate::conv::texture::RobloxTexture;
 use crate::rbx::{BoundingBox, Material, Part, PartShape};
@@ -17,12 +16,45 @@ use crate::vmf::{Side, TextureFace, Displacement};
 const MAX_PART_COUNT: usize = 32768;    // VMF format limitations
 const ID_BLOCK_SIZE: u32 = 35000;
 
-pub trait ConvertOptions<W: Write> {
-    fn input_name(&self) -> &str;
-    fn read_input_data(&self) -> String;
+/// AsRef variant with explicit lifetime
+#[allow(unused)]    // We use one variant at a time in the binary and wasm
+pub enum OwnedOrRef<'a, T> {
+    Owned(T),
+    Ref(&'a T)
+}
 
-    fn vmf_output(&self) -> W;
-    fn texture_output(&self, path: &str) -> W;
+impl<'a, T> OwnedOrRef<'a, T> {
+    pub fn as_ref(&'a self) -> &'a T {
+        match self {
+            OwnedOrRef::Owned(o) => o,
+            OwnedOrRef::Ref(r) => r
+        }
+    }
+}
+
+/// AsMut variant with explicit lifetime
+#[allow(unused)]    // We use one variant at a time in the binary and wasm
+pub enum OwnedOrMut<'a, T> {
+    Owned(T),
+    Ref(&'a mut T)
+}
+
+impl<'a, T> OwnedOrMut<'a, T> {
+    pub fn as_mut(&'a mut self) -> &'a mut T {
+        match self {
+            OwnedOrMut::Owned(o) => o,
+            OwnedOrMut::Ref(r) => r
+        }
+    }
+}
+
+pub trait ConvertOptions<R: Read, W: Write> {
+    fn input_name(&self) -> &str;
+    fn read_input_data<'a>(&'a self) -> OwnedOrRef<'a, String>;
+
+    fn vmf_output<'a>(&'a mut self) -> OwnedOrMut<'a, W>;
+    fn texture_input<'a>(&'a mut self, texture: Material) -> Option<OwnedOrMut<'a, R>>;
+    fn texture_output<'a>(&'a mut self, path: &str) -> OwnedOrMut<'a, W>;
     fn texture_output_enabled(&self) -> bool;
 
     fn map_scale(&self) -> f64;
@@ -33,7 +65,7 @@ pub trait ConvertOptions<W: Write> {
     fn decal_size(&self) -> u64;
 }
 
-pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
+pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O) {
     println!("Converting {}", options.input_name());
     println!("Using map scale: {}×", options.map_scale());
     println!("Auto-skybox [{}]", if options.auto_skybox_enabled() { "ENABLED" } else { "DISABLED" });
@@ -46,7 +78,7 @@ pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
 
     print!("Parsing XML...      ");
     std::io::stdout().flush().unwrap_or_default();
-    match Document::parse(options.read_input_data().as_str()) {
+    match Document::parse(options.read_input_data().as_ref()) {
         Ok(document) => {
             let mut parts = Vec::new();
             parse::parse_xml(document.root_element(), &mut parts, false, options.decal_size());
@@ -122,7 +154,7 @@ pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
                     world_solids.extend(generate_skybox(&mut part_id, &mut side_id, bounding_box, options.map_scale(), &mut texture_map));
                 }
 
-                VMFBuilder(options.vmf_output())
+                VMFBuilder(options.vmf_output().as_mut())
                     .version_info(400, 3325, 0, false)? // Defaults from https://developer.valvesoftware.com/wiki/Valve_Map_Format
                     .visgroups()?
                     .viewsettings()?
@@ -137,15 +169,16 @@ pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
 
                     let mut textures_to_copy = Vec::new();  // We don't want to hash Material, and the low amount of entries in this Vec makes checking pretty fast.
 
+                    let http_client = reqwest::Client::new();
+
                     for texture in texture_map.into_iter().filter(RobloxTexture::must_generate) {
                         if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
                             print!("\tdecal: {}...", id);
                             std::io::stdout().flush().unwrap_or_default();
-                            match texture::fetch_texture(id, texture, texture.dimension_x as u32, texture.dimension_y as u32) {
+                            match texture::fetch_texture(&http_client, id, texture, texture.dimension_x as u32, texture.dimension_y as u32).await {
                                 Ok(image) => {
-
                                     let image_out_path = format!("{}.png", texture.name());
-                                    match image.write_to(&mut options.texture_output(&*image_out_path), ImageFormat::Png) {
+                                    match image.write_to(options.texture_output(&*image_out_path).as_mut(), ImageFormat::Png) {
                                         Ok(_) => println!(" SAVED"),
                                         Err(error) => {
                                             println!("error: could not write texture file {}", error);
@@ -154,7 +187,8 @@ pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
                                     }
 
                                     let vmt_out_path = format!("{}.vmt", texture.name());
-                                    let mut file = options.texture_output(&*vmt_out_path);
+                                    let mut temp = options.texture_output(&*vmt_out_path);
+                                    let file = temp.as_mut();
                                     let result: Result<(), io::Error> = try {
                                         write!(file,
                                                "\"LightmappedGeneric\"\n\
@@ -187,7 +221,8 @@ pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
                             }
 
                             let vmt_out_path = format!("{}.vmt", texture.name());
-                            let mut file = options.texture_output(&*vmt_out_path);
+                            let mut temp = options.texture_output(&*vmt_out_path);
+                            let file = temp.as_mut();
                             let result: Result<(), io::Error> = try {
                                 write!(file,
                                        "\"LightmappedGeneric\"\n\
@@ -221,46 +256,41 @@ pub fn convert<W: Write, O: ConvertOptions<W>>(options: O) {
                         print!("\ttexture: {}...", texture);
                         std::io::stdout().flush().unwrap_or_default();
 
-                        let bytes = match texture {
-                            Material::Plastic => crate::rbx::textures::PLASTIC,
-                            Material::Wood => crate::rbx::textures::WOOD,
-                            Material::Slate => crate::rbx::textures::SLATE,
-                            Material::Concrete => crate::rbx::textures::CONCRETE,
-                            Material::CorrodedMetal => crate::rbx::textures::RUST,
-                            Material::DiamondPlate => crate::rbx::textures::DIAMONDPLATE,
-                            Material::Foil => crate::rbx::textures::ALUMINIUM,
-                            Material::Grass => crate::rbx::textures::GRASS,
-                            Material::Ice => crate::rbx::textures::ICE,
-                            Material::Marble => crate::rbx::textures::MARBLE,
-                            Material::Granite => crate::rbx::textures::GRANITE,
-                            Material::Brick => crate::rbx::textures::BRICK,
-                            Material::Pebble => crate::rbx::textures::PEBBLE,
-                            Material::Sand => crate::rbx::textures::SAND,
-                            Material::Fabric => crate::rbx::textures::FABRIC,
-                            Material::SmoothPlastic => crate::rbx::textures::SMOOTHPLASTIC,
-                            Material::Metal => crate::rbx::textures::METAL,
-                            Material::WoodPlanks => crate::rbx::textures::WOODPLANKS,
-                            Material::Cobblestone => crate::rbx::textures::COBBLESTONE,
-                            Material::Glass => crate::rbx::textures::GLASS,
-                            Material::ForceField => crate::rbx::textures::FORCEFIELD,
-                            Material::Custom { texture: "decal", .. } => crate::rbx::textures::DECAL,
-                            Material::Custom { texture: "studs", .. } => crate::rbx::textures::STUDS,
-                            Material::Custom { texture: "inlet", .. } => crate::rbx::textures::INLET,
-                            Material::Custom { texture: "spawnlocation", .. } => crate::rbx::textures::SPAWNLOCATION,
-                            Material::Custom { .. } => {
-                                println!(" SKIPPED");
-                                continue;
-                            }
-                            Material::Decal { .. } => unsafe { unreachable_unchecked() },
-                            Material::Texture { .. } => unsafe { unreachable_unchecked() },
-                        };
+                        let mut bytes = Vec::new();
+                        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {   // TODO: Remove this hack once trait functions can be async
+                            let window = web_sys::window().unwrap().origin();
+                            let path = format!("{}/textures/{}.png", window, texture);
 
-                        let texture_path = format!("{}.png", texture);
-                        let mut file = options.texture_output(&*texture_path);
-                        if let Err(error) = file.write_all(bytes) {
-                            println!("\t\twarning: could not copy texture file {}: {}", texture, error);
+                            if let Ok(response) = http_client.get(path).send().await {
+                                if let Ok(bytes) = response.bytes().await {
+                                    let texture_path = format!("rbx/{}.png", texture);
+                                    let mut temp = options.texture_output(&*texture_path);
+                                    let file = temp.as_mut();
+                                    if let Err(error) = file.write_all(bytes.as_bytes()) {
+                                        println!("\t\twarning: could not copy texture file {}: {}", texture, error);
+                                    } else {
+                                        println!(" COPIED");
+                                    }
+                                }
+                            }
                         } else {
-                            println!(" COPIED");
+                            let input = options.texture_input(texture);
+                            if let Some(mut file) = input {
+                                if let Err(error) = file.as_mut().read_to_end(&mut bytes) {
+                                    println!("\t\twarning: could not read texture file {}: {}", texture, error);
+                                } else {
+                                    let texture_path = format!("rbx/{}.png", texture);
+                                    let mut temp = options.texture_output(&*texture_path);
+                                    let file = temp.as_mut();
+                                    if let Err(error) = file.write_all(&*bytes) {
+                                        println!("\t\twarning: could not copy texture file {}: {}", texture, error);
+                                    } else {
+                                        println!(" COPIED");
+                                    }
+                                }
+                            } else {
+                                println!(" SKIPPED");
+                            }
                         }
                     }
                 }
@@ -362,10 +392,15 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
 
         let texture =
             if let Some(side_decal) = part.decals[decal_side] {
+                let (color, transparency) = if let Material::Custom { texture: "decal", .. } = &side_decal {    // Slight hack: Do not color "decal" textures
+                    (Color3::white(), 255)
+                } else {
+                    (part.color, (255.0 * (1.0 - part.transparency)) as u8)
+                };
                 RobloxTexture {
                     material: side_decal,
-                    color: part.color,
-                    transparency: (255.0 * (1.0 - part.transparency)) as u8,
+                    color,
+                    transparency,
                     reflectance: (255.0 * part.reflectance) as u8,
                     scale: match side_decal {
                         Material::Decal { .. } | Material::Custom { fill: true, .. } => TextureScale::FILL,

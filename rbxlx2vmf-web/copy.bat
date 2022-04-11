@@ -1,1 +1,0 @@
-copy ".\target\wasm32-unknown-unknown\release\rbxlx2vmf_web.wasm" ".\rbxlx2vmf_web.wasm"

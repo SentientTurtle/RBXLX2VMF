@@ -20,8 +20,26 @@ Converts Roblox XML-format maps (*.rbxlx) to source engine (*.vmf) maps.
 ### Recommended process
 
 1. Design or open Roblox map
-2. Add StringValue with name or value 'func_detail' to detail models (Note: Child-models are also marked detail)
+2. Add StringValue with name or value 'func_detail' to detail models (Note: Nested models are also marked detail)
 3. Save map in XML (*.xbxlx) format
 4. Run conversion tool
-5. Convert the generated texture PNGs to Valve VTF format. (The VTFEdit tool provides bulk 'Convert Folder' functionality)
+5. Convert the generated texture PNGs to Valve VTF format.
 6. Move VTF and VMT texture files to game material folder
+
+## Building
+
+### CLI Version
+
+* Run `cargo build --release` in top level project directory
+
+### Webassembly Version
+
+* Run `build.bat` or `build.sh` shell script with 'rbxlx2vmf-web' as current-directory.
+
+Or manually, in 'rbxlx2vmf-web' directory:
+
+1. Run `cargo build --target wasm32-unknown-unknown --release`
+2. Run `wasm-bindgen --target web --no-typescript --out-dir . "./target/wasm32-unknown-unknown/release/rbxlx2vmf_web.wasm"`
+3. Run `wasm-gc "./rbxlx2vmf_web_bg.wasm"`
+4. Move `"./rbxlx2vmf_web_bg.wasm"` to `"./html/rbxlx2vmf_web_bg.wasm"`
+4. Move `"./rbxlx2vmf_web.js"` to `"./html/rbxlx2vmf_web.js"`

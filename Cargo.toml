@@ -1,6 +1,6 @@
 [package]
 name = "rbxlx2vmf"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2021"
 publish = false
 
@@ -8,6 +8,12 @@ publish = false
 clap = "2.33.3"
 roxmltree = "0.14.1"
 image = "0.23.14"
-reqwest = { version = "0.11.6", features = ["blocking", "json"] }
+reqwest = { version = "0.11.6", features = ["json"] }
 serde_json = "1.0.71"
 flate2 = "1.0.22"
+async-std = { version = "1.11.0", features = ["tokio1"] }
+log =  "0.4.16" # To fix dependency issue in async-std
+
+# To be removed once async-traits are available
+js-sys = "0.3.57"
+web-sys = { version = "0.3.57", features = ["Window", "Response", "ReadableStream"] }

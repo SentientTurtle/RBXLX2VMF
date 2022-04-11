@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Sub, Mul, Div, AddAssign, SubAssign};
 
+#[allow(unused)]    // Only used on CLI
 pub mod textures {
     pub const ALUMINIUM: &'static [u8] = include_bytes!("../textures/aluminium.png");
     pub const BRICK: &'static [u8] = include_bytes!("../textures/brick.png");

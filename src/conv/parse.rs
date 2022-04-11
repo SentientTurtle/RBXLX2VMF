@@ -120,7 +120,11 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                     .for_each(|(face, texture)| {
                         if face < 6 {
                             if let Some(id) = texture.split_once("?id=").and_then(|(_, id)| id.parse::<u64>().ok()) {
-                                decals[face as usize] = Some(Material::Decal { id, size_x: decal_size, size_y: decal_size })
+                                if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {   // We can't fetch decals on WASM as a result of CORS limitations     TODO: Host the web-app version on a dedicated webserver that can proxy the requests
+                                    decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32, size_y: 32 })
+                                } else {
+                                    decals[face as usize] = Some(Material::Decal { id, size_x: decal_size, size_y: decal_size })
+                                }
                             } else {
                                 decals[face as usize] = Some(Material::Custom { texture: "decal", fill: false, generate: true, size_x: 32, size_y: 32 })
                             }

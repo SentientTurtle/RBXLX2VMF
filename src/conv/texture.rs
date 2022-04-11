@@ -5,6 +5,7 @@ use std::io::Read;
 use flate2::read::GzDecoder;
 use image::{DynamicImage, EncodableLayout, GenericImageView, ImageBuffer, ImageFormat, Rgba};
 use image::imageops::FilterType;
+use reqwest::Client;
 use crate::rbx::{Color3, Vector3, Material};
 use crate::vmf::{Side, TextureFace, VMFTexture};
 
@@ -82,18 +83,24 @@ impl VMFTexture for RobloxTexture {
     }
 }
 
-pub fn fetch_texture(id: u64, background: RobloxTexture, width: u32, height: u32) -> Result<DynamicImage, String> {
-    let response = reqwest::blocking::get(format!("https://assetdelivery.roblox.com/v1/assetId/{}", id))
+pub async fn fetch_texture(http_client: &Client, id: u64, background: RobloxTexture, width: u32, height: u32) -> Result<DynamicImage, String> {
+    let response = http_client.get(format!("https://assetdelivery.roblox.com/v1/assetId/{}", id))
+        .send()
+        .await
         .map_err(|err| format!("{}", err))?
         .json::<HashMap<String, serde_json::Value>>()
+        .await
         .map_err(|err| format!("{}", err))?;
     let location = response.get("location")
         .and_then(|value| value.as_str())
         .ok_or("No location specified!".to_string())?;
 
-    let bytes = reqwest::blocking::get(location)
+    let bytes = http_client.get(location)
+        .send()
+        .await
         .map_err(|err| format!("{}", err))?
         .bytes()
+        .await
         .map_err(|err| format!("{}", err))?;
 
     let mut buffer = Vec::with_capacity(bytes.len());   // reqwest supports automatic deflating, but that does not function reliably with the roblox api

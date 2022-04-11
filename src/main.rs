@@ -7,7 +7,8 @@ use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::Path;
 use clap::{App, Arg};
-use crate::conv::ConvertOptions;
+use crate::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
+use crate::rbx::Material;
 
 mod rbx;
 mod vmf;
@@ -65,37 +66,39 @@ fn main() {
             .takes_value(true))
         .get_matches();
 
-    conv::convert(CLIConvertOptions {
-        input_name: matches.value_of("input").unwrap(),
-        input_path: matches.value_of_os("input").unwrap(),
-        output_path: matches.value_of_os("output").unwrap(),
-        texture_output_folder: {
-            let texture_folder = matches.value_of_os("texture-output").unwrap();
-            if let Err(error) = std::fs::create_dir_all(Path::new(texture_folder).join("rbx")) {
-                println!("error: could not create texture output directory {}", error);
-                std::process::exit(-1)
-            }
-            texture_folder
-        },
-        is_texture_output_enabled: !matches.is_present("no-textures"),
-        map_scale: match matches.value_of("map-scale").unwrap().parse() {
-            Ok(f) => f,
-            Err(_) => {
-                println!("error: invalid map scale");
-                std::process::exit(-1)
-            }
-        },
-        auto_skybox_enabled: matches.is_present("auto-skybox"),
-        skybox_clearance: matches.value_of("skybox-height").map(str::parse).and_then(Result::ok).unwrap_or(0f64),
-        optimization_enabled: matches.is_present("optimize"),
-        decal_size: match matches.value_of("decal-size").unwrap().parse() {
-            Ok(size) => size,
-            Err(_) => {
-                println!("error: invalid decal size");
-                std::process::exit(-1)
-            }
-        },
-    });
+    async_std::task::block_on(
+        conv::convert(CLIConvertOptions {
+            input_name: matches.value_of("input").unwrap(),
+            input_path: matches.value_of_os("input").unwrap(),
+            output_path: matches.value_of_os("output").unwrap(),
+            texture_output_folder: {
+                let texture_folder = matches.value_of_os("texture-output").unwrap();
+                if let Err(error) = std::fs::create_dir_all(Path::new(texture_folder).join("rbx")) {
+                    println!("error: could not create texture output directory {}", error);
+                    std::process::exit(-1)
+                }
+                texture_folder
+            },
+            is_texture_output_enabled: !matches.is_present("no-textures"),
+            map_scale: match matches.value_of("map-scale").unwrap().parse() {
+                Ok(f) => f,
+                Err(_) => {
+                    println!("error: invalid map scale");
+                    std::process::exit(-1)
+                }
+            },
+            auto_skybox_enabled: matches.is_present("auto-skybox"),
+            skybox_clearance: matches.value_of("skybox-height").map(str::parse).and_then(Result::ok).unwrap_or(0f64),
+            optimization_enabled: matches.is_present("optimize"),
+            decal_size: match matches.value_of("decal-size").unwrap().parse() {
+                Ok(size) => size,
+                Err(_) => {
+                    println!("error: invalid decal size");
+                    std::process::exit(-1)
+                }
+            },
+        })
+    );
 }
 
 struct CLIConvertOptions<'a> {
@@ -108,15 +111,15 @@ struct CLIConvertOptions<'a> {
     auto_skybox_enabled: bool,
     skybox_clearance: f64,
     optimization_enabled: bool,
-    decal_size: u64
+    decal_size: u64,
 }
 
-impl<'a> ConvertOptions<File> for CLIConvertOptions<'a> {
+impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
     fn input_name(&self) -> &str {
         &self.input_name
     }
 
-    fn read_input_data(&self) -> String {
+    fn read_input_data(&self) ->  OwnedOrRef<'_, String> {
         let mut file = match File::open(self.input_path) {
             Ok(file) => file,
             Err(error) => {
@@ -126,18 +129,18 @@ impl<'a> ConvertOptions<File> for CLIConvertOptions<'a> {
         };
         let mut buffer = String::with_capacity(file.metadata().as_ref().map(Metadata::len).unwrap_or(0) as usize);
         match file.read_to_string(&mut buffer) {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(error) => {
                 println!("error: Could not read input {}", error);
                 std::process::exit(-1)
             }
         }
-        buffer
+        OwnedOrRef::Owned(buffer)
     }
 
-    fn vmf_output(&self) -> File {
+    fn vmf_output(&mut self) -> OwnedOrMut<'_, File> {
         match File::create(self.output_path) {
-            Ok(file) => file,
+            Ok(file) => OwnedOrMut::Owned(file),
             Err(error) => {
                 println!("error: Could not create output file {}", error);
                 std::process::exit(-1)
@@ -145,10 +148,41 @@ impl<'a> ConvertOptions<File> for CLIConvertOptions<'a> {
         }
     }
 
-    fn texture_output(&self, path: &str) -> File {
+    fn texture_input(&mut self, texture: Material) -> Option<OwnedOrMut<'_, &'static [u8]>> {
+        Some(OwnedOrMut::Owned(match texture {
+            Material::Plastic => crate::rbx::textures::PLASTIC,
+            Material::Wood => crate::rbx::textures::WOOD,
+            Material::Slate => crate::rbx::textures::SLATE,
+            Material::Concrete => crate::rbx::textures::CONCRETE,
+            Material::CorrodedMetal => crate::rbx::textures::RUST,
+            Material::DiamondPlate => crate::rbx::textures::DIAMONDPLATE,
+            Material::Foil => crate::rbx::textures::ALUMINIUM,
+            Material::Grass => crate::rbx::textures::GRASS,
+            Material::Ice => crate::rbx::textures::ICE,
+            Material::Marble => crate::rbx::textures::MARBLE,
+            Material::Granite => crate::rbx::textures::GRANITE,
+            Material::Brick => crate::rbx::textures::BRICK,
+            Material::Pebble => crate::rbx::textures::PEBBLE,
+            Material::Sand => crate::rbx::textures::SAND,
+            Material::Fabric => crate::rbx::textures::FABRIC,
+            Material::SmoothPlastic => crate::rbx::textures::SMOOTHPLASTIC,
+            Material::Metal => crate::rbx::textures::METAL,
+            Material::WoodPlanks => crate::rbx::textures::WOODPLANKS,
+            Material::Cobblestone => crate::rbx::textures::COBBLESTONE,
+            Material::Glass => crate::rbx::textures::GLASS,
+            Material::ForceField => crate::rbx::textures::FORCEFIELD,
+            Material::Custom { texture: "decal", .. } => crate::rbx::textures::DECAL,
+            Material::Custom { texture: "studs", .. } => crate::rbx::textures::STUDS,
+            Material::Custom { texture: "inlet", .. } => crate::rbx::textures::INLET,
+            Material::Custom { texture: "spawnlocation", .. } => crate::rbx::textures::SPAWNLOCATION,
+            Material::Custom { .. } | Material::Decal { .. } | Material::Texture { .. } => return None,
+        }))
+    }
+
+    fn texture_output(&mut self, path: &str) -> OwnedOrMut<'_, File> {
         let texture_out_path = Path::new(self.texture_output_folder).join(path);
         match File::create(texture_out_path) {
-            Ok(file) => file,
+            Ok(file) => OwnedOrMut::Owned(file),
             Err(error) => {
                 println!("error: Could not create file {}", error);
                 std::process::exit(-1)
