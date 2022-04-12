@@ -3,13 +3,14 @@
 
 Converts Roblox XML-format maps (*.rbxlx) to source engine (*.vmf) maps.
 
+[Web App version found here](https://sentientturtle.github.io/rbxlx2vmf.html)
+
 ## Usage
 
 | Option                    | Explanation                                                                                                                                               |
 |---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | -i --input <FILE>         | Input RBXLX file to convert                                                                                                                               |
-| -o --output <FILE>        | (optional) Output file, default: "./rbxlx_out.vmf"                                                                                                        |
-| --texture-input <FOLDER>  | (optional) Texture input folder, default: "./textures"                                                                                                    |
+| -o --output <FILE>        | (optional) Output file, default: "./rbxlx_out.vmf"                                                                                                                                                                                       |
 | --texture-output <FOLDER> | (optional) Texture output folder, default: "./textures-out/"                                                                                              |
 | --map-scale <scale>       | (optional) Scale conversion from Roblox studs to Source Engine Hammer Units, default: 15.0 HU/stud                                                        |
 | --no-textures             | Disables texture generation & output                                                                                                                      |
