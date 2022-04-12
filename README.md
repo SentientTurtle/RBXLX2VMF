@@ -1,5 +1,6 @@
 # Roblox to Source Engine map converter
 
+Feel free to open issues/discussions for feature requests or other improvements.
 
 Converts Roblox XML-format maps (*.rbxlx) to source engine (*.vmf) maps.
 
