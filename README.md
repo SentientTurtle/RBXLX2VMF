@@ -1,12 +1,11 @@
 # Roblox to Source Engine map converter
 
-Feel free to open issues/discussions for feature requests or other improvements.
-
 Converts Roblox XML-format maps (*.rbxlx) to source engine (*.vmf) maps.
 
 [Web App version found here](https://sentientturtle.github.io/rbxlx2vmf.html)  
 Note: The web-app runs entirely in your local browser, performance is dependant on your device.
 
+Feel free to open issues/discussions for feature requests or other improvements.
 
 ### Recommended process
 
