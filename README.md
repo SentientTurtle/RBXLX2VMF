@@ -31,13 +31,15 @@ Feel free to open issues/discussions for feature requests or other improvements.
 | Option                    | Explanation                                                                                                                                               |
 |---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
 | -i --input <FILE>         | Input RBXLX file to convert                                                                                                                               |
-| -o --output <FILE>        | (optional) Output file, default: "./rbxlx_out.vmf"                                                                                                                                                                                       |
+| -o --output <FILE>        | (optional) Output file, default: "./rbxlx_out.vmf"                                                                                                        |
 | --texture-output <FOLDER> | (optional) Texture output folder, default: "./textures-out/"                                                                                              |
+| --dev-textures            | (optional) Use source engine developer textures instead of generating map textures                                                                        
 | --map-scale <scale>       | (optional) Scale conversion from Roblox studs to Source Engine Hammer Units, default: 15.0 HU/stud                                                        |
 | --no-textures             | Disables texture generation & output                                                                                                                      |
 | --auto-skybox             | Include automatically generated skybox                                                                                                                    |
 | --skybox-height <height>  | Adds margin space between the top of the map and the skybox, height in Roblox studs                                                                       |
 | --optimize                | Enables part-count optimization by joining identical adjecent parts into a single map brush<br/>**WARNING: This may take a very long time on large maps** |
+| -g --game <GAME>          | Selects which version of source engine to generate map for                                                                                                |
 
 
 ## Building
