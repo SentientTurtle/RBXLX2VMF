@@ -56,6 +56,7 @@ pub trait ConvertOptions<R: Read, W: Write> {
     fn texture_input<'a>(&'a mut self, texture: Material) -> Option<OwnedOrMut<'a, R>>;
     fn texture_output<'a>(&'a mut self, path: &str) -> OwnedOrMut<'a, W>;
     fn texture_output_enabled(&self) -> bool;
+    fn use_dev_textures(&self) -> bool;
 
     fn map_scale(&self) -> f64;
     fn auto_skybox_enabled(&self) -> bool;
@@ -125,7 +126,7 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                                 part_id += 1;
                                 part_id
                             },
-                            sides: decompose_part(*part, &mut side_id, options.map_scale(), &mut texture_map),
+                            sides: decompose_part(*part, &mut side_id, options.map_scale(), options.use_dev_textures(), &mut texture_map),
                         }
                     })
                     .for_each(|s| world_solids.push(s));
@@ -143,7 +144,7 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                                     part_id += 1;
                                     part_id
                                 },
-                                sides: decompose_part(*part, &mut side_id, options.map_scale(), &mut texture_map),
+                                sides: decompose_part(*part, &mut side_id, options.map_scale(), options.use_dev_textures(), &mut texture_map),
                             }
                         )
                     })
@@ -317,7 +318,7 @@ fn to_source_coordinates(vector: Vector3) -> [f64; 3] {
 }
 
 /// Decomposes a Roblox part into it's polyhedron faces, and returns them as source engine Sides
-fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut TextureMap<RobloxTexture>) -> Vec<Side> {
+fn decompose_part(part: Part, id: &mut u32, map_scale: f64, use_dev_textures: bool, texture_map: &mut TextureMap<RobloxTexture>) -> Vec<Side> {
     let vertices = part.vertices();
 
     const DECAL_FRONT: usize = 5;
@@ -391,7 +392,136 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
         };
 
         let texture =
-            if let Some(side_decal) = part.decals[decal_side] {
+            if use_dev_textures {
+                match part.material {
+                    Material::Plastic => {
+                        RobloxTexture {
+                            material: Material::Custom {
+                                texture: "dev/dev_measuregeneric01",
+                                fill: false,
+                                generate: false,
+                                size_x: 64,
+                                size_y: 64
+                            },
+                            color: Color3::white(),
+                            transparency: 255,
+                            reflectance: 0,
+                            scale: TextureScale::FIXED { scale_x: 0.25, scale_z: 0.25 },
+                            no_offset: true,
+                            dimension_x: 64,
+                            dimension_y: 64
+                        }
+                    },
+                    Material::DiamondPlate => {
+                        RobloxTexture {
+                            material: Material::Custom {
+                                texture: "dev/dev_measuregeneric01b",
+                                fill: false,
+                                generate: false,
+                                size_x: 64,
+                                size_y: 64
+                            },
+                            color: Color3::white(),
+                            transparency: 255,
+                            reflectance: 0,
+                            scale: TextureScale::FIXED { scale_x: 0.25, scale_z: 0.25 },
+                            no_offset: true,
+                            dimension_x: 64,
+                            dimension_y: 64
+                        }
+                    },
+                    Material::Wood => {
+                        RobloxTexture {
+                            material: Material::Custom {
+                                texture: "customdev/dev_measuregeneric01red",
+                                fill: false,
+                                generate: false,
+                                size_x: 64,
+                                size_y: 64
+                            },
+                            color: Color3::white(),
+                            transparency: 255,
+                            reflectance: 0,
+                            scale: TextureScale::FIXED { scale_x: 0.25, scale_z: 0.25 },
+                            no_offset: true,
+                            dimension_x: 64,
+                            dimension_y: 64
+                        }
+                    },
+                    Material::Brick => {
+                        RobloxTexture {
+                            material: Material::Custom {
+                                texture: "customdev/dev_measuregeneric01blu",
+                                fill: false,
+                                generate: false,
+                                size_x: 64,
+                                size_y: 64
+                            },
+                            color: Color3::white(),
+                            transparency: 255,
+                            reflectance: 0,
+                            scale: TextureScale::FIXED { scale_x: 0.25, scale_z: 0.25 },
+                            no_offset: true,
+                            dimension_x: 64,
+                            dimension_y: 64
+                        }
+                    },
+                    Material::ForceField => {
+                        RobloxTexture {
+                            material: Material::Custom {
+                                texture: "tools/toolsclip",
+                                fill: false,
+                                generate: false,
+                                size_x: 64,
+                                size_y: 64
+                            },
+                            color: Color3::white(),
+                            transparency: 255,
+                            reflectance: 0,
+                            scale: TextureScale::FIXED { scale_x: 0.25, scale_z: 0.25 },
+                            no_offset: true,
+                            dimension_x: 64,
+                            dimension_y: 64
+                        }
+                    },
+                    Material::Glass => {
+                        RobloxTexture {
+                            material: Material::Custom {
+                                texture: "tools/toolsskybox",
+                                fill: false,
+                                generate: false,
+                                size_x: 64,
+                                size_y: 64
+                            },
+                            color: Color3::white(),
+                            transparency: 255,
+                            reflectance: 0,
+                            scale: TextureScale::FIXED { scale_x: 0.25, scale_z: 0.25 },
+                            no_offset: true,
+                            dimension_x: 64,
+                            dimension_y: 64
+                        }
+                    },
+                    _ => {
+                        RobloxTexture {
+                            material: Material::Custom {
+                                texture: "dev/graygrid",
+                                fill: false,
+                                generate: false,
+                                size_x: 64,
+                                size_y: 64
+                            },
+                            color: Color3::white(),
+                            transparency: 255,
+                            reflectance: 0,
+                            scale: TextureScale::FIXED { scale_x: 0.25, scale_z: 0.25 },
+                            no_offset: true,
+                            dimension_x: 64,
+                            dimension_y: 64
+                        }
+                    }
+                }
+            } else if let Some(side_decal) = part.decals[decal_side] {
                 let (color, transparency) = if let Material::Custom { texture: "decal", .. } = &side_decal {    // Slight hack: Do not color "decal" textures
                     (Color3::white(), 255)
                 } else {
@@ -412,6 +542,7 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
                         }
                         _ => TextureScale::FIXED { scale_x: map_scale / 32.0, scale_z: map_scale / 32.0 },
                     },
+                    no_offset: false,
                     dimension_x: side_decal.dimension_x(),
                     dimension_y: side_decal.dimension_y(),
                 }
@@ -422,6 +553,7 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
                     transparency: (255.0 * (1.0 - part.transparency)) as u8,
                     reflectance: (255.0 * part.reflectance) as u8,
                     scale: TextureScale::FIXED { scale_x: map_scale / 32.0, scale_z: map_scale / 32.0 },
+                    no_offset: false,
                     dimension_x: part.material.dimension_x(),
                     dimension_y: part.material.dimension_y(),
                 }
@@ -569,8 +701,8 @@ fn decompose_part(part: Part, id: &mut u32, map_scale: f64, texture_map: &mut Te
                     }),
                 })
             }
-            PartShape::Block => None,
             PartShape::Cylinder => None,
+            PartShape::Block => None,
         };
 
         let side = Side {
@@ -621,7 +753,7 @@ fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingB
                 reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
-            }, side_id, map_scale, texture_map),
+            }, side_id, map_scale, false, texture_map),
         },
         Solid {
             id: {
@@ -651,7 +783,7 @@ fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingB
                 reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
-            }, side_id, map_scale, texture_map),
+            }, side_id, map_scale, false, texture_map),
         },
         Solid {
             id: {
@@ -681,7 +813,7 @@ fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingB
                 reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
-            }, side_id, map_scale, texture_map),
+            }, side_id, map_scale, false, texture_map),
         },
         Solid {
             id: {
@@ -711,7 +843,7 @@ fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingB
                 reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
-            }, side_id, map_scale, texture_map),
+            }, side_id, map_scale, false, texture_map),
         },
         Solid {
             id: {
@@ -741,7 +873,7 @@ fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingB
                 reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
-            }, side_id, map_scale, texture_map),
+            }, side_id, map_scale, false, texture_map),
         },
         Solid {
             id: {
@@ -771,7 +903,7 @@ fn generate_skybox(part_id: &mut u32, side_id: &mut u32, bounding_box: BoundingB
                 reflectance: 0.0,
                 material: Material::Custom { texture: "tools/toolsskybox", fill: false, generate: false, size_x: 512, size_y: 512 },
                 decals: [None, None, None, None, None, None],
-            }, side_id, map_scale, texture_map),
+            }, side_id, map_scale, false, texture_map),
         }
     ]
 }

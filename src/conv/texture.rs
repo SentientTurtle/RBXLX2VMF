@@ -22,6 +22,7 @@ pub struct RobloxTexture {
     pub transparency: u8,
     pub reflectance: u8,
     pub scale: TextureScale,
+    pub no_offset: bool,
     pub dimension_x: u64,
     pub dimension_y: u64,
 }
@@ -59,27 +60,35 @@ impl VMFTexture for RobloxTexture {
     }
 
     fn offset_x(&self, side: Side) -> f64 {
-        let position = match side.texture_face {
-            TextureFace::X_POS => -side.plane[2][1],
-            TextureFace::X_NEG => side.plane[2][1],
-            TextureFace::Z_POS => -side.plane[2][0],
-            TextureFace::Z_NEG => side.plane[2][0],
-            TextureFace::Y_POS => -side.plane[2][1],
-            TextureFace::Y_NEG => side.plane[2][1]
-        };
-        (position / self.scale_x(side)) % (self.dimension_x as f64)
+        if self.no_offset {
+            0.0
+        } else {
+            let position = match side.texture_face {
+                TextureFace::X_POS => -side.plane[2][1],
+                TextureFace::X_NEG => side.plane[2][1],
+                TextureFace::Z_POS => -side.plane[2][0],
+                TextureFace::Z_NEG => side.plane[2][0],
+                TextureFace::Y_POS => -side.plane[2][1],
+                TextureFace::Y_NEG => side.plane[2][1]
+            };
+            (position / self.scale_x(side)) % (self.dimension_x as f64)
+        }
     }
 
     fn offset_y(&self, side: Side) -> f64 {
-        let position = match side.texture_face {
-            TextureFace::X_POS => side.plane[2][2],
-            TextureFace::X_NEG => side.plane[2][2],
-            TextureFace::Z_POS => side.plane[2][2],
-            TextureFace::Z_NEG => -side.plane[2][2],
-            TextureFace::Y_POS => -side.plane[2][0],
-            TextureFace::Y_NEG => -side.plane[2][0]
-        };
-        (position / self.scale_z(side)) % (self.dimension_y as f64)
+        if self.no_offset {
+            0.0
+        } else {
+            let position = match side.texture_face {
+                TextureFace::X_POS => side.plane[2][2],
+                TextureFace::X_NEG => side.plane[2][2],
+                TextureFace::Z_POS => side.plane[2][2],
+                TextureFace::Z_NEG => -side.plane[2][2],
+                TextureFace::Y_POS => -side.plane[2][0],
+                TextureFace::Y_NEG => -side.plane[2][0]
+            };
+            (position / self.scale_z(side)) % (self.dimension_y as f64)
+        }
     }
 }
 

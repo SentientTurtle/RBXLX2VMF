@@ -35,7 +35,7 @@ impl<'a, 'input> NodeExtensions<'a> for Node<'a, 'input> {
 /// Expects machine-generated RBXLX files as input, and skips any malformed items.
 pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: bool, decal_size: u64) {
     match node.attribute("class") {
-        Some(class @ "Part") | Some(class @ "SpawnLocation") | Some(class @ "TrussPart") => {
+        Some(class @ "Part") | Some(class @ "SpawnLocation") | Some(class @ "TrussPart") | Some(class @ "WedgePart") => {
             let option: Option<()> = try {
                 let referent = node.attribute("referent")?;
                 let properties = node.get_child_with_name("Properties")?;
@@ -166,6 +166,7 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                     "Part" => PartType::Part,
                     "SpawnLocation" => PartType::SpawnLocation,
                     "TrussPart" => PartType::Truss,
+                    "WedgePart" => PartType::Wedge,
                     _ => unreachable!() // We match on class earlier, and only permit the above three options
                 };
 
@@ -205,6 +206,7 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
         Some("Model") => {
             let option: Option<()> = try {
                 let is_model_detail = is_detail |
+                    node.get_child_with_name("Properties")?.get_child_with_attribute("string", "name", "Name")?.text().contains(&"func_detail") |
                     node.children()
                         .filter(|p| {
                             p.attribute("class")

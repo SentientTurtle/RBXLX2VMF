@@ -42,6 +42,10 @@ fn main() {
             .long("no-textures")
             .help("disables texture generation")
             .takes_value(false))
+        .arg(Arg::with_name("dev-textures")
+            .long("dev-textures")
+            .help("use developer textures instead of roblox textures")
+            .takes_value(false))
         .arg(Arg::with_name("auto-skybox")
             .long("auto-skybox")
             .help("enables automatic skybox (Warning: Results in highly unoptimized map)")
@@ -80,6 +84,7 @@ fn main() {
                 texture_folder
             },
             is_texture_output_enabled: !matches.is_present("no-textures"),
+            use_developer_textures: matches.is_present("dev-textures"),
             map_scale: match matches.value_of("map-scale").unwrap().parse() {
                 Ok(f) => f,
                 Err(_) => {
@@ -107,6 +112,7 @@ struct CLIConvertOptions<'a> {
     output_path: &'a OsStr,
     texture_output_folder: &'a OsStr,
     is_texture_output_enabled: bool,
+    use_developer_textures: bool,
     map_scale: f64,
     auto_skybox_enabled: bool,
     skybox_clearance: f64,
@@ -192,6 +198,10 @@ impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
 
     fn texture_output_enabled(&self) -> bool {
         self.is_texture_output_enabled
+    }
+
+    fn use_dev_textures(&self) -> bool {
+        self.use_developer_textures
     }
 
     fn map_scale(&self) -> f64 {

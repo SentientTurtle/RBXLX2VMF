@@ -281,6 +281,7 @@ pub enum PartType {
     Part,
     SpawnLocation,
     Truss,
+    Wedge
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
