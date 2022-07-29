@@ -64,6 +64,7 @@ pub trait ConvertOptions<R: Read, W: Write> {
     fn optimization_enabled(&self) -> bool;
 
     fn decal_size(&self) -> u64;
+    fn skybox_name(&self) -> &str;
 }
 
 pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O) {
@@ -155,11 +156,13 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                     world_solids.extend(generate_skybox(&mut part_id, &mut side_id, bounding_box, options.map_scale(), &mut texture_map));
                 }
 
+                let skyname = options.skybox_name().to_string();  // Make owned copy; We want to borrow options mutable as well
+
                 VMFBuilder(options.vmf_output().as_mut())
                     .version_info(400, 3325, 0, false)? // Defaults from https://developer.valvesoftware.com/wiki/Valve_Map_Format
                     .visgroups()?
                     .viewsettings()?
-                    .world(0, "sky_tf2_04", world_solids, &texture_map)?
+                    .world(0, &*skyname, world_solids, &texture_map)?
                     .detail(detail_solids, &texture_map)?
                     .flush()?;
                 println!("DONE");

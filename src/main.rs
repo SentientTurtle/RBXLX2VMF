@@ -68,6 +68,14 @@ fn main() {
             .help("sets downloaded decal texture size")
             .default_value("256")
             .takes_value(true))
+        .arg(Arg::with_name("game")
+            .long("game")
+            .short("g")
+            .help("sets target source engine game")
+            .required(true)
+            .takes_value(true)
+            .possible_values(&["css", "csgo", "gmod", "hl2", "hl2e1", "hl2e2", "hl", "hls", "l4d", "l4d2", "portal2", "portal", "tf2"])
+        )
         .get_matches();
 
     async_std::task::block_on(
@@ -102,6 +110,22 @@ fn main() {
                     std::process::exit(-1)
                 }
             },
+            skybox_name: match matches.value_of("game").unwrap() {
+                "css" => "sky_day01_05",
+                "csgo" => "sky_day02_05",
+                "gmod" => "painted",
+                "hl2" => "sky_day01_04",
+                "hl2e1" => "sky_ep01_01",
+                "hl2e2" => "sky_ep02_01_hdr",
+                "hl" => "city",
+                "hls" => "sky_wasteland02",
+                "l4d" => "river_hdr",
+                "l4d2" => "sky_l4d_c1_2_hdr",
+                "portal2" => "sky_day01_01",
+                "portal" => "sky_day01_05_hdr",
+                "tf2" => "sky_day01_01",
+                _ => "default_skybox_fixme"
+            }
         })
     );
 }
@@ -118,6 +142,7 @@ struct CLIConvertOptions<'a> {
     skybox_clearance: f64,
     optimization_enabled: bool,
     decal_size: u64,
+    skybox_name: &'a str
 }
 
 impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
@@ -222,5 +247,9 @@ impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
 
     fn decal_size(&self) -> u64 {
         self.decal_size
+    }
+
+    fn skybox_name(&self) -> &str {
+        self.skybox_name
     }
 }

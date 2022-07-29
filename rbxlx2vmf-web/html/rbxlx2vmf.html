@@ -39,6 +39,10 @@
         input[type=number] {
             width: 3em;
         }
+
+        #game_select {
+            width: 7em;
+        }
     </style>
 </head>
 <body>
@@ -57,15 +61,19 @@
             return
         }
         let is_texture_output_enabled = document.getElementById("is_texture_output_enabled").checked;
+        let use_developer_textures = document.getElementById("use_dev_textures").checked;
         let map_scale = document.getElementById("map_scale").value;
         let auto_skybox_enabled = document.getElementById("auto_skybox_enabled").checked;
         let skybox_clearance = document.getElementById("skybox_clearance").value;
         let optimization_enabled = document.getElementById("optimization_enabled").checked;
+        let skyname = document.getElementById("game_select").value;
 
         let reader = new FileReader();
         reader.onload = function (file) {
-            convert_map('map.vmf', file.target.result, is_texture_output_enabled, map_scale, auto_skybox_enabled, skybox_clearance, optimization_enabled)
+            document.body.style.cursor = 'wait'
+            convert_map('map.vmf', file.target.result, is_texture_output_enabled, use_developer_textures, map_scale, auto_skybox_enabled, skybox_clearance, optimization_enabled, skyname)
                 .then((zip_data) => {
+                    document.body.style.cursor = 'default'
                     const blob = new Blob([zip_data], {type: 'application/zip'});
 
                     if (window.navigator.msSaveOrOpenBlob) {
@@ -101,8 +109,31 @@
             <input type="number" id="map_scale" name="map_scale" value="15.0" step="0.1">
         </div>
         <div>
+            <label for="game_select">Source Engine version: </label>
+            <input type="text" id="game_select" name="game_select" list="game_list" placeholder="Select game" required="required"/>
+            <datalist id="game_list">
+                <option value="css">Counter Strike Source</option>
+                <option value="csgo">Counter Strike Global Offensive</option>
+                <option value="gmod">Garry's mod</option>
+                <option value="hl">Half Life</option>
+                <option value="hls">Half Life Source</option>
+                <option value="hl2">Half Life 2</option>
+                <option value="hl2e1">Half Life 2: Episode 1</option>
+                <option value="hl2e2">Half Life 2: Episode 2</option>
+                <option value="l4d">Left 4 Dead</option>
+                <option value="l4d2">Left 4 Dead 2</option>
+                <option value="portal">Portal</option>
+                <option value="portal2">Portal 2</option>
+                <option value="tf2">Team Fortress 2</option>
+            </datalist>
+        </div>
+        <div>
             <input type="checkbox" id="is_texture_output_enabled" name="is_texture_output_enabled" checked>
             <label for="is_texture_output_enabled">Generate Textures</label>
+        </div>
+        <div>
+            <input type="checkbox" id="use_dev_textures" name="use_dev_textures">
+            <label for="use_dev_textures">Use Developer Textures</label>
         </div>
         <div>
             <div>
