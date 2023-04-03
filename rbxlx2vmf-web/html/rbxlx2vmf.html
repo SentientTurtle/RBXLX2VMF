@@ -102,7 +102,6 @@
                             log_is_error = true;
                             document.getElementById("log-box").className = "box-error";
                         }
-                        console.log(e.data);
                         // Intentional fallthrough
                     case "LOG":
                         log_element.innerText = e.data.message;
@@ -118,6 +117,9 @@
                         URL.revokeObjectURL(object_url)
 
                         document.getElementById("conversion-progress-bar").setAttribute("value", "100") // Set progress
+                        break
+                    case "ALERT":
+                        alert(e.data.message)
                         break
                     default:
                         console.log(e.data)

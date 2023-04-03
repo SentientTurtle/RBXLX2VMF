@@ -1,6 +1,8 @@
 extern crate wee_alloc;
 extern crate wasm_bindgen;
 
+use std::rc::Rc;
+use std::cell::RefCell;
 use std::fmt::Arguments;
 use std::io::{Cursor, IoSlice, Write};
 use js_sys::Uint8Array;
@@ -26,47 +28,49 @@ extern "C" {
 }
 
 struct WebLogger {
-    pub buffer: Vec<u8>,
+    pub buffer: Rc<RefCell<Vec<u8>>>,
     pub log_target: fn(&str),
     pub clear_buffer: bool
 }
 
 impl Write for WebLogger {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buffer.write(buf)
+        RefCell::borrow_mut(&self.buffer).write(buf)
     }
 
     fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
-        self.buffer.write_vectored(bufs)
+        RefCell::borrow_mut(&self.buffer).write_vectored(bufs)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let _ = self.buffer.flush();
-        let string = String::from_utf8_lossy(&*self.buffer);
+        let mut buffer = RefCell::borrow_mut(&self.buffer);
+        let string = String::from_utf8_lossy(&*buffer);
         (self.log_target)(string.as_ref());
-        if self.clear_buffer { self.buffer.clear(); }
+        if self.clear_buffer { buffer.clear(); }
         Ok(())
     }
 
     fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
-        self.buffer.write_all(buf)
+        RefCell::borrow_mut(&self.buffer).write_all(buf)
     }
 
     fn write_fmt(&mut self, fmt: Arguments<'_>) -> std::io::Result<()> {
-        self.buffer.write_fmt(fmt)
+        RefCell::borrow_mut(&self.buffer).write_fmt(fmt)
     }
 }
 
 impl Drop for WebLogger {
     fn drop(&mut self) {
-        if !self.buffer.is_empty() {
-            let string = String::from_utf8_lossy(&*self.buffer);
+        let buffer = RefCell::borrow_mut(&self.buffer);
+        if !buffer.is_empty() {
+            let string = String::from_utf8_lossy(&*buffer);
             (self.log_target)(string.as_ref())
         }
     }
 }
 
 struct JSConvertOptions<'a> {
+    print_buffer: Rc<RefCell<Vec<u8>>>,
     input_name: &'a str,
     input_data: String,
     zip_writer: ZipWriter<Cursor<&'a mut Vec<u8>>>,
@@ -83,10 +87,10 @@ struct JSConvertOptions<'a> {
 
 impl<'a> ConvertOptions<&'a [u8], ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions<'a> {
     fn print_output(&self) -> Box<dyn std::io::Write> {
-        Box::new(WebLogger { buffer: Vec::new(), log_target: html_log, clear_buffer: false })
+        Box::new(WebLogger { buffer: self.print_buffer.clone(), log_target: html_log, clear_buffer: false })
     }
     fn error_output(&self) -> Box<dyn std::io::Write> {
-        Box::new(WebLogger { buffer: Vec::new(), log_target: html_log_error, clear_buffer: false })
+        Box::new(WebLogger { buffer: self.print_buffer.clone(), log_target: html_log_error, clear_buffer: false })
     }
 
     fn input_name(&self) -> &str {
@@ -159,12 +163,13 @@ pub async fn convert_map(
     optimization_enabled: bool,
     skyname: String,
     web_origin: String
-) -> Uint8Array {
+) -> Result<Uint8Array, JsValue> {
     let mut zip_buffer = Vec::new();
     let zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buffer));
 
     log("Starting conversion...");
     let result = conv::convert(JSConvertOptions {
+        print_buffer: Rc::new(RefCell::new(Vec::new())),
         input_name: &*input_name,
         input_data,
         zip_writer,
@@ -194,10 +199,19 @@ pub async fn convert_map(
         web_origin: &web_origin
     }).await;
     match result {
-        Ok(0) => log("Conversion complete..."),
-        Ok(_) => alert("Conversion failed, see log"),
-        Err(error) => alert(&*format!("Conversion failed: {}", error))
+        Ok(0) => {
+            log("Conversion complete...");
+            Ok(js_sys::Uint8Array::from(&*zip_buffer))
+        },
+        Ok(_) => {
+            alert("Conversion failed, see log");
+            Err(JsValue::from("Conversion failed, see log"))
+        },
+        Err(error) => {
+            let message = format!("Conversion failed: {}", error);
+            alert(&*message);
+            Err(JsValue::from(&*message))
+        }
     }
 
-    js_sys::Uint8Array::from(&*zip_buffer)
 }
