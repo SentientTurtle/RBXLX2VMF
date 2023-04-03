@@ -178,7 +178,7 @@ impl<'a> Part<'a> {
     }
 
     // TODO: Performance can be increased through splitting the parts list into "chunks" of 3D space as to further cull comparisons
-    pub fn join_adjacent(parts: Vec<Part<'a>>, print_progress: bool) -> Vec<Part<'a>> {
+    pub fn join_adjacent<P: Write + ?Sized>(parts: Vec<Part<'a>>, print_progress: bool, print_target: &mut P) -> Vec<Part<'a>> {
         let mut map = HashMap::new();
         let mut unique_parts = Vec::new();
         for part in parts.into_iter() {
@@ -194,22 +194,19 @@ impl<'a> Part<'a> {
         let map_len = map.len();
         for (index, parts) in map.values_mut().enumerate() {
             if print_progress {
-                print!("\n\t{}/{}\t[                                                  ]", index + 1, map_len);
-                std::io::stdout().flush().unwrap_or_default();
+                write!(print_target, "\t{}/{}\t[", index + 1, map_len).unwrap();
+                print_target.flush().unwrap_or_default();
             }
-            let mut reset_point = 0;
+            let mut progress_printed = 0;
+            let mut parts_visited = 0;
             'join_loop: loop {
                 if print_progress {
-                    print!("\r\t{}/{}\t[", index + 1, map_len);
-                    let progress = (reset_point * 50) / parts.len();
-                    for _ in 0..progress {
-                        print!("-");
+                    let progress = (parts_visited * 50) / parts.len();
+                    for _ in progress_printed..progress {
+                        write!(print_target, "-").unwrap();
                     }
-                    for _ in progress..50 {
-                        print!(" ");
-                    }
-                    print!("]");
-                    std::io::stdout().flush().unwrap_or_default();
+                    progress_printed = progress;
+                    print_target.flush().unwrap_or_default();
                 }
 
                 for i in 0..parts.len() {
@@ -247,7 +244,7 @@ impl<'a> Part<'a> {
                                         }
                                         parts.truncate(last_index);
 
-                                        reset_point = i;
+                                        parts_visited = i;
                                         continue 'join_loop;
                                     }
                                 }
@@ -255,18 +252,16 @@ impl<'a> Part<'a> {
                         }
                     }
                 }
-
-                if print_progress {
-                    print!("\r\t{}/{}\t[--------------------------------------------------]", index + 1, map_len);
-                    std::io::stdout().flush().unwrap_or_default();
-                }
                 break;
             }
-        }
 
-        if print_progress {
-            println!();
-            std::io::stdout().flush().unwrap_or_default();
+            if print_progress {
+                for _ in progress_printed..50 {
+                    write!(print_target, "-").unwrap();
+                }
+                writeln!(print_target, "]").unwrap();
+                print_target.flush().unwrap_or_default();
+            }
         }
 
         map.into_values()

@@ -4,8 +4,9 @@
 
 use std::ffi::OsStr;
 use std::fs::{File, Metadata};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
+use std::process::ExitCode;
 use clap::{App, Arg};
 use crate::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
 use crate::rbx::Material;
@@ -14,7 +15,7 @@ mod rbx;
 mod vmf;
 mod conv;
 
-fn main() {
+fn main() -> ExitCode {
     let matches = App::new("RBXLX2VMF")
         .version("1.0")
         .about("Converts Roblox RBXLX files to Valve VMF files.")
@@ -78,7 +79,7 @@ fn main() {
         )
         .get_matches();
 
-    async_std::task::block_on(
+    let exit_code = async_std::task::block_on(
         conv::convert(CLIConvertOptions {
             input_name: matches.value_of("input").unwrap(),
             input_path: matches.value_of_os("input").unwrap(),
@@ -124,10 +125,19 @@ fn main() {
                 "portal2" => "sky_day01_01",
                 "portal" => "sky_day01_05_hdr",
                 "tf2" => "sky_day01_01",
-                _ => "default_skybox_fixme"
+                _ => "default_skybox_fixme" // The only guard against invalid values here is HTML form validation, but as we're a clientside application, just substitute in a placeholder value
             }
         })
     );
+
+    return match exit_code {
+        Ok(code) => ExitCode::from(code),
+        // Error writing to STDIO
+        Err(error) => {
+            eprintln!("{}", error);
+            ExitCode::FAILURE
+        }
+    }
 }
 
 struct CLIConvertOptions<'a> {
@@ -146,6 +156,13 @@ struct CLIConvertOptions<'a> {
 }
 
 impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
+    fn print_output(&self) -> Box<dyn Write> {
+        Box::new(std::io::stdout())
+    }
+    fn error_output(&self) -> Box<dyn Write> {
+        Box::new(std::io::stderr())
+    }
+
     fn input_name(&self) -> &str {
         &self.input_name
     }

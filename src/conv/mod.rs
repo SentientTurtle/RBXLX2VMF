@@ -49,6 +49,9 @@ impl<'a, T> OwnedOrMut<'a, T> {
 }
 
 pub trait ConvertOptions<R: Read, W: Write> {
+    fn print_output(&self) -> Box<dyn Write>;
+    fn error_output(&self) -> Box<dyn Write>;
+
     fn input_name(&self) -> &str;
     fn read_input_data<'a>(&'a self) -> OwnedOrRef<'a, String>;
 
@@ -65,38 +68,42 @@ pub trait ConvertOptions<R: Read, W: Write> {
 
     fn decal_size(&self) -> u64;
     fn skybox_name(&self) -> &str;
+
+    fn web_origin(&self) -> &str;
 }
 
-pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O) {
-    println!("Converting {}", options.input_name());
-    println!("Using map scale: {}×", options.map_scale());
-    println!("Auto-skybox [{}]", if options.auto_skybox_enabled() { "ENABLED" } else { "DISABLED" });
-    println!("Part-count optimization [{}]", if options.optimization_enabled() { "ENABLED" } else { "DISABLED" });
-    println!();
+pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O) -> Result<u8, std::io::Error> {
+    let mut print_out = options.print_output();
+    let mut error_out = options.error_output();
+    writeln!(print_out, "Converting {}", options.input_name())?;
+    writeln!(print_out, "Using map scale: {}×", options.map_scale())?;
+    writeln!(print_out, "Auto-skybox [{}]", if options.auto_skybox_enabled() { "ENABLED" } else { "DISABLED" })?;
+    writeln!(print_out, "Part-count optimization [{}]", if options.optimization_enabled() { "ENABLED" } else { "DISABLED" })?;
+    writeln!(print_out)?;
 
-    print!("Reading input...    ");    // We need to flush print! manually, as it is usually line-buffered.
-    std::io::stdout().flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
-    println!("DONE");
+    write!(print_out, "Reading input...    ")?;    // We need to flush print! manually, as it is usually line-buffered.
+    print_out.flush().unwrap_or_default();  // Error discarded; Failed flush causes no problems.
+    writeln!(print_out, "DONE")?;
 
-    print!("Parsing XML...      ");
-    std::io::stdout().flush().unwrap_or_default();
+    write!(print_out, "Parsing XML...      ")?;
+    print_out.flush().unwrap_or_default();
     match Document::parse(options.read_input_data().as_ref()) {
         Ok(document) => {
             let mut parts = Vec::new();
             parse::parse_xml(document.root_element(), &mut parts, false, options.decal_size());
-            println!("{} parts found!", parts.len());
+            writeln!(print_out, "{} parts found!", parts.len())?;
 
             if options.optimization_enabled() {
-                print!("Optimizing...       ");
-                std::io::stdout().flush().unwrap_or_default();
+                write!(print_out, "Optimizing...\n")?;
+                print_out.flush().unwrap_or_default();
                 let old_count = parts.len();
-                parts = Part::join_adjacent(parts, true);
-                println!("\nReduced part count to {} (-{})", parts.len(), old_count - parts.len());
+                parts = Part::join_adjacent(parts, true, &mut print_out);
+                writeln!(print_out, "Reduced part count to {} (-{})", parts.len(), old_count - parts.len())?;
             }
 
             if parts.len() > MAX_PART_COUNT {
-                println!("error: Too many parts, found: {} parts, must be fewer than {}", parts.len(), MAX_PART_COUNT + 1);
-                std::process::exit(-1)
+                writeln!(error_out, "error: Too many parts, found: {} parts, must be fewer than {}", parts.len(), MAX_PART_COUNT + 1)?;
+                return Ok(1)
             }
 
             // Hack: Source engine does not support surface-displacement on detail
@@ -113,8 +120,8 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
 
                 let mut texture_map = TextureMap::new();
 
-                print!("Writing VMF...      ");
-                std::io::stdout().flush().unwrap_or_default();
+                write!(print_out, "Writing VMF...      ")?;
+                print_out.flush().unwrap_or_default();
 
                 let mut world_solids = Vec::with_capacity(parts.len());
                 let mut detail_solids = Vec::new();
@@ -165,11 +172,11 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                     .world(0, &*skyname, world_solids, &texture_map)?
                     .detail(detail_solids, &texture_map)?
                     .flush()?;
-                println!("DONE");
+                writeln!(print_out, "DONE")?;
 
                 if options.texture_output_enabled() {
-                    print!("Writing textures...\n");
-                    std::io::stdout().flush().unwrap_or_default();
+                    write!(print_out, "Writing textures...\n")?;
+                    print_out.flush().unwrap_or_default();
 
                     let mut textures_to_copy = Vec::new();  // We don't want to hash Material, and the low amount of entries in this Vec makes checking pretty fast.
 
@@ -177,16 +184,16 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
 
                     for texture in texture_map.into_iter().filter(RobloxTexture::must_generate) {
                         if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
-                            print!("\tdecal: {}...", id);
-                            std::io::stdout().flush().unwrap_or_default();
+                            write!(print_out, "\tdecal: {}...", id)?;
+                            print_out.flush().unwrap_or_default();
                             match texture::fetch_texture(&http_client, id, texture, texture.dimension_x as u32, texture.dimension_y as u32).await {
                                 Ok(image) => {
                                     let image_out_path = format!("{}.png", texture.name());
                                     match image.write_to(options.texture_output(&*image_out_path).as_mut(), ImageFormat::Png) {
-                                        Ok(_) => println!(" SAVED"),
+                                        Ok(_) => writeln!(print_out, " SAVED")?,
                                         Err(error) => {
-                                            println!("error: could not write texture file {}", error);
-                                            std::process::exit(-1)
+                                            writeln!(error_out, "error: could not write texture file {}", error)?;
+                                            return Ok(1)
                                         }
                                     }
 
@@ -210,14 +217,14 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                                         write!(file, "}}\n")?;
                                     };
                                     if let Err(error) = result {
-                                        println!("\t\twarning: could not write VMT: {}", error);
+                                        writeln!(print_out, "\t\twarning: could not write VMT: {}", error)?;
                                     }
                                 }
-                                Err(error) => println!("error loading decal: {}", error),
+                                Err(error) => writeln!(error_out, "error loading decal: {}", error)?,
                             }
                         } else {
-                            print!("\ttexture: {}...", texture.name());
-                            std::io::stdout().flush().unwrap_or_default();
+                            write!(print_out, "\ttexture: {}...", texture.name())?;
+                            print_out.flush().unwrap_or_default();
 
                             if !(textures_to_copy.contains(&texture.material)) {
                                 debug_assert!(!(matches!(texture.material, Material::Decal { .. }) && matches!(texture.material, Material::Texture { .. })));
@@ -246,67 +253,78 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                                     write!(file, "\t$envmaptint \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance = 1.0 / (255.0 / (texture.reflectance as f64)))?;
                                 }
                                 write!(file, "}}\n")?;
-                                println!(" SAVED");
                             };
                             if let Err(error) = result {
-                                println!("\t\twarning: could not write VMT: {}", error);
+                                writeln!(error_out, "\t\twarning: could not write VMT: {}", error)?;
+                            } else {
+                                writeln!(print_out, " SAVED")?;
                             }
                         };
                     }
 
-                    print!("Copying textures...\n");
-                    std::io::stdout().flush().unwrap_or_default();
+                    write!(print_out, "Copying textures...\n")?;
+                    print_out.flush().unwrap_or_default();
                     for texture in textures_to_copy {
-                        print!("\ttexture: {}...", texture);
-                        std::io::stdout().flush().unwrap_or_default();
+                        write!(print_out, "\ttexture: {}...", texture)?;
+                        print_out.flush().unwrap_or_default();
 
                         let mut bytes = Vec::new();
                         if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {   // TODO: Remove this hack once trait functions can be async
-                            let window = web_sys::window().unwrap().origin();
-                            let path = format!("{}/textures/{}.png", window, texture);
+                            let path = format!("{}/textures/{}.png", options.web_origin(), texture);
 
-                            if let Ok(response) = http_client.get(path).send().await {
-                                if let Ok(bytes) = response.bytes().await {
-                                    let texture_path = format!("rbx/{}.png", texture);
-                                    let mut temp = options.texture_output(&*texture_path);
-                                    let file = temp.as_mut();
-                                    if let Err(error) = file.write_all(bytes.as_bytes()) {
-                                        println!("\t\twarning: could not copy texture file {}: {}", texture, error);
+                            match http_client.get(path).send().await {
+                                Ok(response) => {
+                                    if response.status().is_success() {
+                                        match response.bytes().await {
+                                            Ok(bytes) => {
+                                                let texture_path = format!("rbx/{}.png", texture);
+                                                let mut temp = options.texture_output(&*texture_path);
+                                                let file = temp.as_mut();
+                                                if let Err(error) = file.write_all(bytes.as_bytes()) {
+                                                    writeln!(error_out, "\t\twarning: could not copy texture file {}: {}", texture, error)?;
+                                                } else {
+                                                    writeln!(print_out, " COPIED")?;
+                                                }
+                                            }
+                                            Err(error) => writeln!(print_out, " FAILED ({})", error)?,
+                                        }
                                     } else {
-                                        println!(" COPIED");
+                                        writeln!(print_out, " FAILED (HTTP {})", response.status())?;
                                     }
                                 }
+                                Err(error) => writeln!(print_out, " FAILED ({})", error)?
                             }
                         } else {
                             let input = options.texture_input(texture);
                             if let Some(mut file) = input {
                                 if let Err(error) = file.as_mut().read_to_end(&mut bytes) {
-                                    println!("\t\twarning: could not read texture file {}: {}", texture, error);
+                                    writeln!(error_out, "\t\twarning: could not read texture file {}: {}", texture, error)?;
                                 } else {
                                     let texture_path = format!("rbx/{}.png", texture);
                                     let mut temp = options.texture_output(&*texture_path);
                                     let file = temp.as_mut();
                                     if let Err(error) = file.write_all(&*bytes) {
-                                        println!("\t\twarning: could not copy texture file {}: {}", texture, error);
+                                        writeln!(error_out, "\t\twarning: could not copy texture file {}: {}", texture, error)?;
                                     } else {
-                                        println!(" COPIED");
+                                        writeln!(print_out, " COPIED")?;
                                     }
                                 }
                             } else {
-                                println!(" SKIPPED");
+                                writeln!(print_out, " SKIPPED")?;
                             }
                         }
                     }
                 }
             };
             if let Err(error) = result {
-                println!("error: could not write VMF {}", error);
-                std::process::exit(-1)
+                writeln!(error_out, "error: could not write VMF {}", error)?;
+                return Ok(1);
             }
+            Ok(0)
         }
         Err(error) => {
-            println!("error: invalid XML {}", error);
-            std::process::exit(-1)
+            writeln!(error_out, "error: invalid XML {}", error)?;
+            return Ok(1);
         }
     }
 }

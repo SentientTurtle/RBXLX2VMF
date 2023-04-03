@@ -1,7 +1,8 @@
 extern crate wee_alloc;
 extern crate wasm_bindgen;
 
-use std::io::Cursor;
+use std::fmt::Arguments;
+use std::io::{Cursor, IoSlice, Write};
 use js_sys::Uint8Array;
 use wasm_bindgen::prelude::*;
 use zip::write::FileOptions;
@@ -12,6 +13,58 @@ use rbxlx2vmf::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
 // Use `wee_alloc` as the global allocator
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console)]
+    fn log(s: &str);
+
+    fn html_log(s: &str);
+    fn html_log_error(s: &str);
+
+    fn alert(s: &str);
+}
+
+struct WebLogger {
+    pub buffer: Vec<u8>,
+    pub log_target: fn(&str),
+    pub clear_buffer: bool
+}
+
+impl Write for WebLogger {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buffer.write(buf)
+    }
+
+    fn write_vectored(&mut self, bufs: &[IoSlice<'_>]) -> std::io::Result<usize> {
+        self.buffer.write_vectored(bufs)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = self.buffer.flush();
+        let string = String::from_utf8_lossy(&*self.buffer);
+        (self.log_target)(string.as_ref());
+        if self.clear_buffer { self.buffer.clear(); }
+        Ok(())
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.buffer.write_all(buf)
+    }
+
+    fn write_fmt(&mut self, fmt: Arguments<'_>) -> std::io::Result<()> {
+        self.buffer.write_fmt(fmt)
+    }
+}
+
+impl Drop for WebLogger {
+    fn drop(&mut self) {
+        if !self.buffer.is_empty() {
+            let string = String::from_utf8_lossy(&*self.buffer);
+            (self.log_target)(string.as_ref())
+        }
+    }
+}
 
 struct JSConvertOptions<'a> {
     input_name: &'a str,
@@ -24,10 +77,18 @@ struct JSConvertOptions<'a> {
     skybox_clearance: f64,
     optimization_enabled: bool,
     decal_size: u64,
-    skybox_name: &'a str
+    skybox_name: &'a str,
+    web_origin: &'a str
 }
 
 impl<'a> ConvertOptions<&'a [u8], ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions<'a> {
+    fn print_output(&self) -> Box<dyn std::io::Write> {
+        Box::new(WebLogger { buffer: Vec::new(), log_target: html_log, clear_buffer: false })
+    }
+    fn error_output(&self) -> Box<dyn std::io::Write> {
+        Box::new(WebLogger { buffer: Vec::new(), log_target: html_log_error, clear_buffer: false })
+    }
+
     fn input_name(&self) -> &str {
         &self.input_name
     }
@@ -80,14 +141,10 @@ impl<'a> ConvertOptions<&'a [u8], ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConv
     fn skybox_name(&self) -> &str {
         self.skybox_name
     }
-}
 
-#[wasm_bindgen]
-extern "C" {
-    // Use `js_namespace` here to bind `console.log(..)` instead of just
-    // `log(..)`
-    #[wasm_bindgen(js_namespace = console)]
-    fn log(s: &str);
+    fn web_origin(&self) -> &str {
+        self.web_origin
+    }
 }
 
 #[wasm_bindgen]
@@ -100,13 +157,14 @@ pub async fn convert_map(
     auto_skybox_enabled: bool,
     skybox_clearance: f64,
     optimization_enabled: bool,
-    skyname: String
+    skyname: String,
+    web_origin: String
 ) -> Uint8Array {
     let mut zip_buffer = Vec::new();
     let zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buffer));
 
     log("Starting conversion...");
-    conv::convert(JSConvertOptions {
+    let result = conv::convert(JSConvertOptions {
         input_name: &*input_name,
         input_data,
         zip_writer,
@@ -131,9 +189,15 @@ pub async fn convert_map(
             "portal2" => "sky_day01_01",
             "portal" => "sky_day01_05_hdr",
             "tf2" => "sky_day01_01",
-            _ => "default_skybox_fixme"
-        }
+            _ => "default_skybox_fixme" // The only guard against invalid values here is HTML form validation, but as we're a clientside application, just substitute in a placeholder value
+        },
+        web_origin: &web_origin
     }).await;
-    log("Conversion complete...");
+    match result {
+        Ok(0) => log("Conversion complete..."),
+        Ok(_) => alert("Conversion failed, see log"),
+        Err(error) => alert(&*format!("Conversion failed: {}", error))
+    }
+
     js_sys::Uint8Array::from(&*zip_buffer)
 }

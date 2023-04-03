@@ -20,7 +20,13 @@
             border-radius: 0.5em;
         }
 
-        #form {
+        #column {
+            display: flex;
+            flex-direction: column;
+            gap: 2em;
+        }
+
+        .box {
             font-family: Arial, sans-serif;
             display: flex;
             flex-direction: column;
@@ -28,6 +34,14 @@
             padding: 1em;
             background: #203131;
             border-radius: 0.5em;
+        }
+
+        .box-error {
+            font-family: Arial, sans-serif;
+            padding: 1em;
+            background: #312020;
+            border-radius: 0.5em;
+            border: 0.25em red solid;
         }
 
         .div-gap {
@@ -43,63 +57,104 @@
         #game_select {
             width: 7em;
         }
+
+        #conversion-progress-bar {
+            width: 100%
+        }
     </style>
 </head>
 <body>
-<script type="module">
-    import {convert_map, default as init} from './rbxlx2vmf_web.js';
-
-    async function run() {
-        await init('./rbxlx2vmf_web_bg.wasm');
-
-        // make the function available to the browser
-        window.convert_map = convert_map;
-    }
-
-    document.getElementById("convert-button").addEventListener("click", function () {
-        if (document.getElementById("input_data").files.length === 0) {  // Ignore if no file selected
-            return
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const FEATURES_AVAILABLE = typeof WebAssembly === "object" && window.Worker !== undefined;
+        if (FEATURES_AVAILABLE) {
+            document.getElementById("feature-compatibility-warning").setAttribute("hidden", "")
+        } else {
+            document.getElementById("feature-compatibility-warning").removeAttribute("hidden")
         }
-        let is_texture_output_enabled = document.getElementById("is_texture_output_enabled").checked;
-        let use_developer_textures = document.getElementById("use_dev_textures").checked;
-        let map_scale = document.getElementById("map_scale").value;
-        let auto_skybox_enabled = document.getElementById("auto_skybox_enabled").checked;
-        let skybox_clearance = document.getElementById("skybox_clearance").value;
-        let optimization_enabled = document.getElementById("optimization_enabled").checked;
-        let skyname = document.getElementById("game_select").value;
 
-        let reader = new FileReader();
-        reader.onload = function (file) {
-            document.body.style.cursor = 'wait'
-            convert_map('map.vmf', file.target.result, is_texture_output_enabled, use_developer_textures, map_scale, auto_skybox_enabled, skybox_clearance, optimization_enabled, skyname)
-                .then((zip_data) => {
-                    document.body.style.cursor = 'default'
-                    const blob = new Blob([zip_data], {type: 'application/zip'});
+        document.getElementById("convert-button").addEventListener("click", function () {
+            if (document.getElementById("form").checkValidity() === false) {
+                return  // Do nothing on empty form; HTML will highlight the error to the user
+            }
 
-                    if (window.navigator.msSaveOrOpenBlob) {
-                        window.navigator.msSaveBlob(blob, "Map.zip");
-                    } else {
-                        const elem = window.document.createElement('a');
-                        let objurl = window.URL.createObjectURL(blob);
-                        elem.href = objurl;
-                        elem.download = "Map.zip";
-                        document.body.appendChild(elem);
-                        elem.click();
-                        document.body.removeChild(elem);
-                        URL.revokeObjectURL(objurl)
-                    }
+            if (document.getElementById("input_data").files.length === 0) {  // Ignore if no file selected
+                return
+            }
+
+            let is_texture_output_enabled = document.getElementById("is_texture_output_enabled").checked;
+            let use_developer_textures = document.getElementById("use_dev_textures").checked;
+            let map_scale = document.getElementById("map_scale").value;
+            let auto_skybox_enabled = document.getElementById("auto_skybox_enabled").checked;
+            let skybox_clearance = document.getElementById("skybox_clearance").value;
+            let optimization_enabled = document.getElementById("optimization_enabled").checked;
+            let skyname = document.getElementById("game_select").value;
+
+            const conversion_worker = new Worker("./rbxlx2vmf_worker.js", { type: "module"});
+
+
+            let log_element = document.getElementById("log");
+            let log_is_error = false;
+            conversion_worker.onmessage = (e) => {
+                switch (e.data.message_type) {
+                    case "LOG_ERROR":
+                        if (!log_is_error) {
+                            log_is_error = true;
+                            document.getElementById("log-box").className = "box-error";
+                        }
+                        console.log(e.data);
+                        // Intentional fallthrough
+                    case "LOG":
+                        log_element.innerText = e.data.message;
+                        break
+                    case "COMPLETE":
+                        const temp_download_element = window.document.createElement('a');
+                        let object_url = window.URL.createObjectURL(e.data.blob);
+                        temp_download_element.href = object_url;
+                        temp_download_element.download = "Map.zip";
+                        document.body.appendChild(temp_download_element);
+                        temp_download_element.click();
+                        document.body.removeChild(temp_download_element);
+                        URL.revokeObjectURL(object_url)
+
+                        document.getElementById("conversion-progress-bar").setAttribute("value", "100") // Set progress
+                        break
+                    default:
+                        console.log(e.data)
+                }
+            }
+
+            let reader = new FileReader();
+            reader.onload = function (file) {
+                conversion_worker.postMessage({
+                    message_type: "START",
+                    file: file.target.result,
+                    is_texture_output_enabled: is_texture_output_enabled,
+                    use_developer_textures: use_developer_textures,
+                    map_scale: map_scale,
+                    auto_skybox_enabled: auto_skybox_enabled,
+                    skybox_clearance: skybox_clearance,
+                    optimization_enabled: optimization_enabled,
+                    skyname: skyname,
+                    web_origin: window.origin
                 })
-        }
-        reader.readAsText(document.getElementById("input_data").files[0])
-    });
+            }
+            reader.readAsText(document.getElementById("input_data").files[0])
 
-    run();
+            document.getElementById("conversion-progress-bar").removeAttribute("value") // Set progress to indeterminate
+        });
+
+    })
 </script>
 <div id="title">
     <header><b>Roblox to Source Engine Map Converter</b></header>
 </div>
-<div id="form-box">
-    <form id="form" onSubmit="return false">
+<div id="column">
+    <noscript>
+        <div id="js-compatibility-warning" class="box-error">This browser is unsupported; Javascript must be enabled.</div>
+    </noscript>
+    <div id="feature-compatibility-warning" class="box-error" hidden>This browser is unsupported; WebAssembly support is required.</div>
+    <form id="form" class="box" onSubmit="return false">
         <div class="div-gap">
             <label for="input_data">Roblox file:</label>
             <input type="file" id="input_data" accept=".rbxlx" required="required">
@@ -153,6 +208,13 @@
             <input id="convert-button" type="submit" value="Convert">
         </div>
     </form>
+    <div class="box">
+        <progress id="conversion-progress-bar" value="0"></progress>
+    </div>
+    <div id="log-box" class="box">
+        <b>Log</b>
+        <pre id="log"></pre>
+    </div>
 </div>
 </body>
 <html>
