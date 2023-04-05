@@ -90,7 +90,7 @@
             let optimization_enabled = document.getElementById("optimization_enabled").checked;
             let skyname = document.getElementById("game_select").value;
 
-            const conversion_worker = new Worker("./rbxlx2vmf_worker.js", { type: "module"});
+            const conversion_worker = new Worker("./rbxlx2vmf_worker.js", { type: "classic"});
 
 
             let log_element = document.getElementById("log");

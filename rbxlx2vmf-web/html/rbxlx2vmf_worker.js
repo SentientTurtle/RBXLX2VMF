@@ -1,4 +1,4 @@
-import {convert_map, default as init} from './rbxlx2vmf_web.js';
+importScripts('./rbxlx2vmf_web.js');
 
 function html_log(message) {
     postMessage({message_type: "LOG", message: message});
@@ -18,9 +18,9 @@ self.alert = alert;
 
 onmessage = async (e) => {
     if (e.data.message_type === "START") {
-        await init('./rbxlx2vmf_web_bg.wasm');
+        await wasm_bindgen('./rbxlx2vmf_web_bg.wasm');
 
-        convert_map(
+        wasm_bindgen.convert_map(
             'map.vmf',
             e.data.file,
             e.data.is_texture_output_enabled,

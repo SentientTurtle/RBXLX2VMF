@@ -30,7 +30,8 @@ extern "C" {
 struct WebLogger {
     pub buffer: Rc<RefCell<Vec<u8>>>,
     pub log_target: fn(&str),
-    pub clear_buffer: bool
+    pub clear_buffer: bool,
+    pub write_on_drop: bool
 }
 
 impl Write for WebLogger {
@@ -61,8 +62,8 @@ impl Write for WebLogger {
 
 impl Drop for WebLogger {
     fn drop(&mut self) {
-        let buffer = RefCell::borrow_mut(&self.buffer);
-        if !buffer.is_empty() {
+        if self.write_on_drop {
+            let buffer = RefCell::borrow_mut(&self.buffer);
             let string = String::from_utf8_lossy(&*buffer);
             (self.log_target)(string.as_ref())
         }
@@ -87,10 +88,10 @@ struct JSConvertOptions<'a> {
 
 impl<'a> ConvertOptions<&'a [u8], ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions<'a> {
     fn print_output(&self) -> Box<dyn std::io::Write> {
-        Box::new(WebLogger { buffer: self.print_buffer.clone(), log_target: html_log, clear_buffer: false })
+        Box::new(WebLogger { buffer: self.print_buffer.clone(), log_target: html_log, clear_buffer: false, write_on_drop: true })
     }
     fn error_output(&self) -> Box<dyn std::io::Write> {
-        Box::new(WebLogger { buffer: self.print_buffer.clone(), log_target: html_log_error, clear_buffer: false })
+        Box::new(WebLogger { buffer: self.print_buffer.clone(), log_target: html_log_error, clear_buffer: false, write_on_drop: false })
     }
 
     fn input_name(&self) -> &str {
