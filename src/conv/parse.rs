@@ -22,7 +22,7 @@ impl<'a, 'input> NodeExtensions<'a> for Node<'a, 'input> {
     fn get_child_with_attribute(self, tag_name: &str, attribute_name: &str, attribute_value: &str) -> Option<Node<'a, 'input>> {
         self.children()
             .filter(|node| node.tag_name().name().eq(tag_name))
-            .filter(|node| node.attribute(attribute_name).contains(&attribute_value))
+            .filter(|node| node.attribute(attribute_name) == Some(&attribute_value))
             .next()
     }
 
@@ -105,7 +105,7 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                 decal_for_side(properties, &mut decals, "LeftSurface", DECAL_LEFT);
 
                 node.children()
-                    .filter(|child_node| child_node.tag_name().name() == "Item" && child_node.attribute("class").contains(&"Decal"))
+                    .filter(|child_node| child_node.tag_name().name() == "Item" && child_node.attribute("class") == Some(&"Decal"))
                     .filter_map(|child_node| child_node.get_child_with_name("Properties"))
                     .filter_map(|properties| {
                         if let (Some(face), Some(texture)) = (
@@ -132,7 +132,7 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                     });
 
                 node.children()
-                    .filter(|child_node| child_node.tag_name().name() == "Item" && child_node.attribute("class").contains(&"Texture"))
+                    .filter(|child_node| child_node.tag_name().name() == "Item" && child_node.attribute("class") == Some(&"Texture"))
                     .filter_map(|child_node| child_node.get_child_with_name("Properties"))
                     .filter_map(|properties| {
                         if let (Some(face), Some(texture), Some(studs_per_u), Some(studs_per_v), Some(offset_studs_per_u), Some(offset_studs_per_v)) = (
@@ -206,7 +206,7 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
         Some("Model") => {
             let option: Option<()> = try {
                 let is_model_detail = is_detail |
-                    node.get_child_with_name("Properties")?.get_child_with_attribute("string", "name", "Name")?.text().contains(&"func_detail") |
+                    (node.get_child_with_name("Properties")?.get_child_with_attribute("string", "name", "Name")?.text() == Some(&"func_detail")) |
                     node.children()
                         .filter(|p| {
                             p.attribute("class")
@@ -215,8 +215,8 @@ pub fn parse_xml<'a>(node: Node<'a, '_>, parts: &mut Vec<Part<'a>>, is_detail: b
                         })
                         .any(|node| {
                             if let Some(properties) = node.get_child_with_name("Properties") {
-                                properties.get_child_with_attribute("string", "name", "Name").as_ref().and_then(Node::text).contains(&"func_detail")
-                                    | properties.get_child_with_attribute("string", "name", "Value").as_ref().and_then(Node::text).contains(&"func_detail")
+                                (properties.get_child_with_attribute("string", "name", "Name").as_ref().and_then(Node::text) == Some(&"func_detail"))
+                                    | (properties.get_child_with_attribute("string", "name", "Value").as_ref().and_then(Node::text) == Some(&"func_detail"))
                             } else {
                                 false
                             }

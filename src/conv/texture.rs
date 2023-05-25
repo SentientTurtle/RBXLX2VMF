@@ -1,11 +1,5 @@
 extern crate reqwest;
 
-use std::collections::HashMap;
-use std::io::Read;
-use flate2::read::GzDecoder;
-use image::{DynamicImage, EncodableLayout, GenericImageView, ImageBuffer, ImageFormat, Rgba};
-use image::imageops::FilterType;
-use reqwest::Client;
 use crate::rbx::{Color3, Vector3, Material};
 use crate::vmf::{Side, TextureFace, VMFTexture};
 
@@ -90,44 +84,4 @@ impl VMFTexture for RobloxTexture {
             (position / self.scale_z(side)) % (self.dimension_y as f64)
         }
     }
-}
-
-pub async fn fetch_texture(http_client: &Client, id: u64, background: RobloxTexture, width: u32, height: u32) -> Result<DynamicImage, String> {
-    let response = http_client.get(format!("https://assetdelivery.roblox.com/v1/assetId/{}", id))
-        .send()
-        .await
-        .map_err(|err| format!("{}", err))?
-        .json::<HashMap<String, serde_json::Value>>()
-        .await
-        .map_err(|err| format!("{}", err))?;
-    let location = response.get("location")
-        .and_then(|value| value.as_str())
-        .ok_or("No location specified!".to_string())?;
-
-    let bytes = http_client.get(location)
-        .send()
-        .await
-        .map_err(|err| format!("{}", err))?
-        .bytes()
-        .await
-        .map_err(|err| format!("{}", err))?;
-
-    let mut buffer = Vec::with_capacity(bytes.len());   // reqwest supports automatic deflating, but that does not function reliably with the roblox api
-    let bytes = match GzDecoder::new(bytes.as_bytes()).read_to_end(&mut buffer) {
-        Ok(_) => &buffer[..],
-        Err(_) => bytes.as_bytes(),
-    };
-
-    let image = image::load_from_memory_with_format(bytes.as_bytes(), ImageFormat::Png)
-        .or_else(|_| image::load_from_memory_with_format(bytes.as_bytes(), ImageFormat::Jpeg))
-        .map_err(|err| { format!("{}", err) })?;
-
-// Resize image; Source engine only supports power-of-two sized images. Image is resized into a square, texture UVs scale it into the proper ratio in-engine
-    let image = image.resize_exact(width, height, FilterType::Lanczos3);
-
-    let mut buf = ImageBuffer::from_pixel(image.width(), image.height(), Rgba([background.color.red, background.color.green, background.color.blue, background.transparency]));
-
-    image::imageops::overlay(&mut buf, &image, 0, 0);
-
-    Ok(DynamicImage::ImageRgba8(buf))
 }

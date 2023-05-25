@@ -1,6 +1,5 @@
 #![allow(non_snake_case)]
 #![feature(try_blocks)]
-#![feature(option_result_contains)]
 
 use std::ffi::OsStr;
 use std::fs::{File, Metadata};
@@ -268,5 +267,9 @@ impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
 
     fn skybox_name(&self) -> &str {
         self.skybox_name
+    }
+
+    fn web_origin(&self) -> &str {
+        ""  // Unused in CLI version; TODO: Remove when async-trait functions are available.
     }
 }

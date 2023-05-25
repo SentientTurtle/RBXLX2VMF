@@ -3,7 +3,7 @@ pub mod texture;
 
 use std::io;
 use std::io::{Read, Write};
-use image::{EncodableLayout, ImageFormat};
+use image::{EncodableLayout};
 use roxmltree::Document;
 use crate::conv::texture::RobloxTexture;
 use crate::rbx::{BoundingBox, Material, Part, PartShape};
@@ -13,7 +13,9 @@ use crate::conv::texture::TextureScale;
 use crate::vmf::{Side, TextureFace, Displacement};
 
 
-const MAX_PART_COUNT: usize = 32768;    // VMF format limitations
+// VMF format limitations
+const MAX_BRUSH_COUNT: usize = 8192;
+const MAX_MAP_SIZE: f64 = 32768.0;
 const ID_BLOCK_SIZE: u32 = 35000;
 
 /// AsRef variant with explicit lifetime
@@ -93,6 +95,29 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
             parse::parse_xml(document.root_element(), &mut parts, false, options.decal_size());
             writeln!(print_out, "{} parts found!", parts.len())?;
 
+            let mut bounding_box = parts.first()    // Initialise boundingbox based on first part, or default to origin coordinate
+                .copied()
+                .map(BoundingBox::from_part)
+                .unwrap_or(BoundingBox::zeros());
+
+            bounding_box = parts.iter()
+                .copied()
+                .fold(bounding_box, BoundingBox::include);
+
+            let map_size = bounding_box.size() * options.map_scale();
+            if (map_size.x > MAX_MAP_SIZE) || (map_size.x > MAX_MAP_SIZE) || (map_size.x > MAX_MAP_SIZE) {
+                writeln!(error_out)?;
+                writeln!(error_out, "WARNING: Map exceeds source engine size limitations, and will not compile!")?;
+                writeln!(error_out, "Map size            X: {:6.0}hu Y: {:6.0}hu Z: {:6.0}hu", map_size.x, map_size.y, map_size.z)?;
+                writeln!(error_out, "Engine limits       X: {:6.0}hu Y: {:6.0}hu Z: {:6.0}hu", MAX_MAP_SIZE, MAX_MAP_SIZE, MAX_MAP_SIZE)?;
+                writeln!(error_out)?;
+                error_out.flush()?;
+            } else {
+                writeln!(print_out, "Map size            X: {:6.0}hu Y: {:6.0}hu Z: {:6.0}hu", map_size.x, map_size.y, map_size.z)?;
+            }
+
+            bounding_box.center_on_origin(&mut parts);
+
             if options.optimization_enabled() {
                 write!(print_out, "Optimizing...\n")?;
                 print_out.flush().unwrap_or_default();
@@ -101,8 +126,9 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                 writeln!(print_out, "Reduced part count to {} (-{})", parts.len(), old_count - parts.len())?;
             }
 
-            if parts.len() > MAX_PART_COUNT {
-                writeln!(error_out, "error: Too many parts, found: {} parts, must be fewer than {}", parts.len(), MAX_PART_COUNT + 1)?;
+            if parts.len() > MAX_BRUSH_COUNT {
+                writeln!(error_out, "error: Too many parts, found: {} parts, must be fewer than {}", parts.len(), MAX_BRUSH_COUNT + 1)?;
+                error_out.flush()?;
                 return Ok(1)
             }
 
@@ -113,10 +139,6 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                 let mut part_id = ID_BLOCK_SIZE * 0;    // IDs split into blocks to avoid overlap
                 let mut side_id = ID_BLOCK_SIZE * 1;
                 let mut entity_id = ID_BLOCK_SIZE * 2;
-
-                let mut bounding_box = parts.iter()
-                    .copied()
-                    .fold(BoundingBox::zeros(), BoundingBox::include);
 
                 let mut texture_map = TextureMap::new();
 
@@ -184,44 +206,7 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
 
                     for texture in texture_map.into_iter().filter(RobloxTexture::must_generate) {
                         if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
-                            write!(print_out, "\tdecal: {}...", id)?;
-                            print_out.flush().unwrap_or_default();
-                            match texture::fetch_texture(&http_client, id, texture, texture.dimension_x as u32, texture.dimension_y as u32).await {
-                                Ok(image) => {
-                                    let image_out_path = format!("{}.png", texture.name());
-                                    match image.write_to(options.texture_output(&*image_out_path).as_mut(), ImageFormat::Png) {
-                                        Ok(_) => writeln!(print_out, " SAVED")?,
-                                        Err(error) => {
-                                            writeln!(error_out, "error: could not write texture file {}", error)?;
-                                            return Ok(1)
-                                        }
-                                    }
-
-                                    let vmt_out_path = format!("{}.vmt", texture.name());
-                                    let mut temp = options.texture_output(&*vmt_out_path);
-                                    let file = temp.as_mut();
-                                    let result: Result<(), io::Error> = try {
-                                        write!(file,
-                                               "\"LightmappedGeneric\"\n\
-                                           {{\n\
-                                           \t$basetexture \"{}\"\n",
-                                               texture.name()
-                                        )?;
-                                        if texture.transparency != 255 {
-                                            write!(file, "\t$translucent 1\n")?;
-                                        }
-                                        if texture.reflectance != 0 {
-                                            write!(file, "\t$envmap env_cubemap\n")?;
-                                            write!(file, "\t$envmaptint \"[{reflectance} {reflectance} {reflectance}]\"\n", reflectance = 1.0 / (255.0 / (texture.reflectance as f64)))?;
-                                        }
-                                        write!(file, "}}\n")?;
-                                    };
-                                    if let Err(error) = result {
-                                        writeln!(print_out, "\t\twarning: could not write VMT: {}", error)?;
-                                    }
-                                }
-                                Err(error) => writeln!(error_out, "error loading decal: {}", error)?,
-                            }
+                            writeln!(print_out, "\tdecal: {} UNSUPPORTED", id)?;
                         } else {
                             write!(print_out, "\ttexture: {}...", texture.name())?;
                             print_out.flush().unwrap_or_default();
@@ -256,6 +241,7 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                             };
                             if let Err(error) = result {
                                 writeln!(error_out, "\t\twarning: could not write VMT: {}", error)?;
+                                error_out.flush()?;
                             } else {
                                 writeln!(print_out, " SAVED")?;
                             }
@@ -282,6 +268,7 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                                                 let file = temp.as_mut();
                                                 if let Err(error) = file.write_all(bytes.as_bytes()) {
                                                     writeln!(error_out, "\t\twarning: could not copy texture file {}: {}", texture, error)?;
+                                                    error_out.flush()?;
                                                 } else {
                                                     writeln!(print_out, " COPIED")?;
                                                 }
@@ -299,12 +286,14 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                             if let Some(mut file) = input {
                                 if let Err(error) = file.as_mut().read_to_end(&mut bytes) {
                                     writeln!(error_out, "\t\twarning: could not read texture file {}: {}", texture, error)?;
+                                    error_out.flush()?;
                                 } else {
                                     let texture_path = format!("rbx/{}.png", texture);
                                     let mut temp = options.texture_output(&*texture_path);
                                     let file = temp.as_mut();
                                     if let Err(error) = file.write_all(&*bytes) {
                                         writeln!(error_out, "\t\twarning: could not copy texture file {}: {}", texture, error)?;
+                                        error_out.flush()?;
                                     } else {
                                         writeln!(print_out, " COPIED")?;
                                     }
@@ -318,12 +307,14 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
             };
             if let Err(error) = result {
                 writeln!(error_out, "error: could not write VMF {}", error)?;
+                error_out.flush()?;
                 return Ok(1);
             }
             Ok(0)
         }
         Err(error) => {
             writeln!(error_out, "error: invalid XML {}", error)?;
+            error_out.flush()?;
             return Ok(1);
         }
     }

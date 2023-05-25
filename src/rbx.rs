@@ -819,6 +819,38 @@ pub struct BoundingBox {
 }
 
 impl BoundingBox {
+    pub fn center(self) -> Vector3 {
+        Vector3 {
+            x: (self.x_max + self.x_min) / 2.0,
+            y: (self.y_max + self.y_min) / 2.0,
+            z: (self.z_max + self.z_min) / 2.0,
+        }
+    }
+
+    pub fn size(self) -> Vector3 {
+        Vector3 {
+            x: (self.x_max - self.x_min).abs(),
+            y: (self.y_max - self.y_min).abs(),
+            z: (self.z_max - self.z_min).abs(),
+        }
+    }
+
+    pub fn center_on_origin(&mut self, parts: &mut Vec<Part>) {
+        let origin_offset = self.center();
+        self.x_min -= origin_offset.x;
+        self.x_max -= origin_offset.x;
+        self.y_min -= origin_offset.y;
+        self.y_max -= origin_offset.y;
+        self.z_min -= origin_offset.z;
+        self.z_max -= origin_offset.z;
+
+        for part in parts.iter_mut() {
+            part.cframe.position.x -= origin_offset.x;
+            part.cframe.position.y -= origin_offset.y;
+            part.cframe.position.z -= origin_offset.z;
+        }
+    }
+
     pub fn zeros() -> BoundingBox {
         BoundingBox {
             x_min: 0.0,
@@ -828,6 +860,19 @@ impl BoundingBox {
             z_min: 0.0,
             z_max: 0.0,
         }
+    }
+
+    pub fn from_part(part: Part) -> BoundingBox {
+        let vertex = part.vertices()[0];
+        BoundingBox {
+            x_min: vertex.x,
+            x_max: vertex.x,
+            y_min: vertex.y,
+            y_max: vertex.y,
+            z_min: vertex.z,
+            z_max: vertex.z,
+        }
+            .include(part)  // Include rest of part vertices
     }
 
     pub fn include(mut self, part: Part) -> BoundingBox {
