@@ -11,7 +11,7 @@ Feel free to open issues/discussions for feature requests or other improvements.
 
 1. Design or open Roblox map
 2. Add StringValue with name or value 'func_detail' to detail models (Note: Nested models are also marked detail)
-3. Save map in XML (*.xbxlx) format
+3. Save map in XML (*.rbxlx) format
 4. Run conversion tool
 5. Convert the generated texture PNGs to Valve VTF format.
 6. Move VTF and VMT texture files to game material folder
