@@ -2,8 +2,7 @@ pub mod parse;
 pub mod texture;
 
 use std::io;
-use std::io::{Read, Write};
-use image::{EncodableLayout};
+use std::io::{Write};
 use roxmltree::Document;
 use crate::conv::texture::RobloxTexture;
 use crate::rbx::{BoundingBox, Material, Part, PartShape};
@@ -36,7 +35,7 @@ impl<'a, T> OwnedOrRef<'a, T> {
 
 /// AsMut variant with explicit lifetime
 #[allow(unused)]    // We use one variant at a time in the binary and wasm
-pub enum OwnedOrMut<'a, T> {
+pub enum OwnedOrMut<'a, T: 'a> {
     Owned(T),
     Ref(&'a mut T)
 }
@@ -50,7 +49,9 @@ impl<'a, T> OwnedOrMut<'a, T> {
     }
 }
 
-pub trait ConvertOptions<R: Read, W: Write> {
+// This trait is "pub" as the wasm-specific code is in a separate crate, we do not have a public API
+#[allow(async_fn_in_trait)]
+pub trait ConvertOptions<W: Write> {
     fn print_output(&self) -> Box<dyn Write>;
     fn error_output(&self) -> Box<dyn Write>;
 
@@ -58,7 +59,7 @@ pub trait ConvertOptions<R: Read, W: Write> {
     fn read_input_data<'a>(&'a self) -> OwnedOrRef<'a, String>;
 
     fn vmf_output<'a>(&'a mut self) -> OwnedOrMut<'a, W>;
-    fn texture_input<'a>(&'a mut self, texture: Material) -> Option<OwnedOrMut<'a, R>>;
+    async fn texture_input(&mut self, texture: Material) -> Option<Result<Vec<u8>, String>>;
     fn texture_output<'a>(&'a mut self, path: &str) -> OwnedOrMut<'a, W>;
     fn texture_output_enabled(&self) -> bool;
     fn use_dev_textures(&self) -> bool;
@@ -74,7 +75,7 @@ pub trait ConvertOptions<R: Read, W: Write> {
     fn web_origin(&self) -> &str;
 }
 
-pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O) -> Result<u8, std::io::Error> {
+pub async fn convert<W: Write, O: ConvertOptions<W>>(mut options: O) -> Result<u8, std::io::Error> {
     let mut print_out = options.print_output();
     let mut error_out = options.error_output();
     writeln!(print_out, "Converting {}", options.input_name())?;
@@ -200,18 +201,15 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                 writeln!(print_out, "DONE")?;
 
                 if options.texture_output_enabled() {
-                    write!(print_out, "Writing textures...\n")?;
+                    write!(print_out, "Writing materials...\n")?;
                     print_out.flush().unwrap_or_default();
 
                     let mut textures_to_copy = Vec::new();  // We don't want to hash Material, and the low amount of entries in this Vec makes checking pretty fast.
-
-                    let http_client = reqwest::Client::new();
-
                     for texture in texture_map.into_iter().filter(RobloxTexture::must_generate) {
                         if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
                             writeln!(print_out, "\tdecal: {} UNSUPPORTED", id)?;
                         } else {
-                            write!(print_out, "\ttexture: {}...", texture.name())?;
+                            write!(print_out, "\tmaterial: {}...", texture.name())?;
                             print_out.flush().unwrap_or_default();
 
                             if !(textures_to_copy.contains(&texture.material)) {
@@ -246,7 +244,7 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                                 writeln!(error_out, "\t\twarning: could not write VMT: {}", error)?;
                                 error_out.flush()?;
                             } else {
-                                writeln!(print_out, " SAVED")?;
+                                writeln!(print_out, " DONE")?;
                             }
                         };
                     }
@@ -257,53 +255,27 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
                         write!(print_out, "\ttexture: {}...", texture)?;
                         print_out.flush().unwrap_or_default();
 
-                        let mut bytes = Vec::new();
-                        if cfg!(all(target_arch = "wasm32", target_os = "unknown")) {   // TODO: Remove this hack once trait functions can be async
-                            let path = format!("{}/textures/{}.png", options.web_origin(), texture);
-
-                            match http_client.get(path).send().await {
-                                Ok(response) => {
-                                    if response.status().is_success() {
-                                        match response.bytes().await {
-                                            Ok(bytes) => {
-                                                let texture_path = format!("rbx/{}.png", texture);
-                                                let mut temp = options.texture_output(&*texture_path);
-                                                let file = temp.as_mut();
-                                                if let Err(error) = file.write_all(bytes.as_bytes()) {
-                                                    writeln!(error_out, "\t\twarning: could not copy texture file {}: {}", texture, error)?;
-                                                    error_out.flush()?;
-                                                } else {
-                                                    writeln!(print_out, " COPIED")?;
-                                                }
-                                            }
-                                            Err(error) => writeln!(print_out, " FAILED ({})", error)?,
-                                        }
-                                    } else {
-                                        writeln!(print_out, " FAILED (HTTP {})", response.status())?;
-                                    }
-                                }
-                                Err(error) => writeln!(print_out, " FAILED ({})", error)?
-                            }
-                        } else {
-                            let input = options.texture_input(texture);
-                            if let Some(mut file) = input {
-                                if let Err(error) = file.as_mut().read_to_end(&mut bytes) {
-                                    writeln!(error_out, "\t\twarning: could not read texture file {}: {}", texture, error)?;
-                                    error_out.flush()?;
-                                } else {
+                        let input = options.texture_input(texture).await;
+                        if let Some(read_result) = input {
+                            match read_result {
+                                Ok(data) => {
                                     let texture_path = format!("rbx/{}.png", texture);
                                     let mut temp = options.texture_output(&*texture_path);
                                     let file = temp.as_mut();
-                                    if let Err(error) = file.write_all(&*bytes) {
+                                    if let Err(error) = file.write_all(&*data) {
                                         writeln!(error_out, "\t\twarning: could not copy texture file {}: {}", texture, error)?;
                                         error_out.flush()?;
                                     } else {
                                         writeln!(print_out, " COPIED")?;
                                     }
+                                },
+                                Err(message) => {
+                                    writeln!(error_out, "\t\t{}", message)?;
+                                    error_out.flush()?;
                                 }
-                            } else {
-                                writeln!(print_out, " SKIPPED")?;
                             }
+                        } else {
+                            writeln!(print_out, " SKIPPED")?;
                         }
                     }
                 }

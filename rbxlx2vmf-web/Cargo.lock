@@ -1167,6 +1167,7 @@ version = "0.1.0"
 dependencies = [
  "js-sys",
  "rbxlx2vmf",
+ "reqwest",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

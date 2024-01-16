@@ -11,6 +11,7 @@ use zip::write::FileOptions;
 use zip::ZipWriter;
 use rbxlx2vmf::conv;
 use rbxlx2vmf::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
+use rbxlx2vmf::rbx::Material;
 
 // Use `wee_alloc` as the global allocator
 #[global_allocator]
@@ -86,7 +87,7 @@ struct JSConvertOptions<'a> {
     web_origin: &'a str
 }
 
-impl<'a> ConvertOptions<&'a [u8], ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions<'a> {
+impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions<'a> {
     fn print_output(&self) -> Box<dyn std::io::Write> {
         Box::new(WebLogger { buffer: self.print_buffer.clone(), log_target: html_log, clear_buffer: false, write_on_drop: true })
     }
@@ -107,8 +108,24 @@ impl<'a> ConvertOptions<&'a [u8], ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConv
         OwnedOrMut::Ref(&mut self.zip_writer)
     }
 
-    fn texture_input(&mut self, _texture: rbxlx2vmf::rbx::Material) -> Option<OwnedOrMut<'_, &'a [u8]>> {
-        None    // TODO: Rust does not yet support async trait functions, so this implementation has been moved into ::conv
+    async fn texture_input(&mut self, texture: Material) -> Option<Result<Vec<u8>, String>> {
+        let path = format!("{}/textures/{}.png", self.web_origin(), texture);
+        let http_client = reqwest::Client::new();
+
+        match http_client.get(path).send().await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    match response.bytes().await {
+                        Ok(bytes) => Some(Ok(bytes.to_vec())),
+                        Err(error) => Some(Err(format!(" FAILED ({})", error))),
+                    }
+                } else {
+                    // TODO: Maybe return None and skip texture generation for HTTP 404?
+                    Some(Err(format!(" FAILED (HTTP {})", response.status())))
+                }
+            }
+            Err(error) => Some(Err(format!(" FAILED ({})", error)))
+        }
     }
 
     fn texture_output(&mut self, path: &str) -> OwnedOrMut<'_, ZipWriter<Cursor<&'a mut Vec<u8>>>> {

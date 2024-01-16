@@ -154,7 +154,7 @@ struct CLIConvertOptions<'a> {
     skybox_name: &'a str
 }
 
-impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
+impl<'a> ConvertOptions<File> for CLIConvertOptions<'a> {
     fn print_output(&self) -> Box<dyn Write> {
         Box::new(std::io::stdout())
     }
@@ -195,35 +195,37 @@ impl<'a> ConvertOptions<&'static [u8], File> for CLIConvertOptions<'a> {
         }
     }
 
-    fn texture_input(&mut self, texture: Material) -> Option<OwnedOrMut<'_, &'static [u8]>> {
-        Some(OwnedOrMut::Owned(match texture {
-            Material::Plastic => crate::rbx::textures::PLASTIC,
-            Material::Wood => crate::rbx::textures::WOOD,
-            Material::Slate => crate::rbx::textures::SLATE,
-            Material::Concrete => crate::rbx::textures::CONCRETE,
-            Material::CorrodedMetal => crate::rbx::textures::RUST,
-            Material::DiamondPlate => crate::rbx::textures::DIAMONDPLATE,
-            Material::Foil => crate::rbx::textures::ALUMINIUM,
-            Material::Grass => crate::rbx::textures::GRASS,
-            Material::Ice => crate::rbx::textures::ICE,
-            Material::Marble => crate::rbx::textures::MARBLE,
-            Material::Granite => crate::rbx::textures::GRANITE,
-            Material::Brick => crate::rbx::textures::BRICK,
-            Material::Pebble => crate::rbx::textures::PEBBLE,
-            Material::Sand => crate::rbx::textures::SAND,
-            Material::Fabric => crate::rbx::textures::FABRIC,
-            Material::SmoothPlastic => crate::rbx::textures::SMOOTHPLASTIC,
-            Material::Metal => crate::rbx::textures::METAL,
-            Material::WoodPlanks => crate::rbx::textures::WOODPLANKS,
-            Material::Cobblestone => crate::rbx::textures::COBBLESTONE,
-            Material::Glass => crate::rbx::textures::GLASS,
-            Material::ForceField => crate::rbx::textures::FORCEFIELD,
-            Material::Custom { texture: "decal", .. } => crate::rbx::textures::DECAL,
-            Material::Custom { texture: "studs", .. } => crate::rbx::textures::STUDS,
-            Material::Custom { texture: "inlet", .. } => crate::rbx::textures::INLET,
-            Material::Custom { texture: "spawnlocation", .. } => crate::rbx::textures::SPAWNLOCATION,
-            Material::Custom { .. } | Material::Decal { .. } | Material::Texture { .. } => return None,
-        }))
+    async fn texture_input(&mut self, texture: Material) -> Option<Result<Vec<u8>, String>> {
+        Some(Ok(Vec::from(
+            match texture {
+                Material::Plastic => crate::rbx::textures::PLASTIC,
+                Material::Wood => crate::rbx::textures::WOOD,
+                Material::Slate => crate::rbx::textures::SLATE,
+                Material::Concrete => crate::rbx::textures::CONCRETE,
+                Material::CorrodedMetal => crate::rbx::textures::RUST,
+                Material::DiamondPlate => crate::rbx::textures::DIAMONDPLATE,
+                Material::Foil => crate::rbx::textures::ALUMINIUM,
+                Material::Grass => crate::rbx::textures::GRASS,
+                Material::Ice => crate::rbx::textures::ICE,
+                Material::Marble => crate::rbx::textures::MARBLE,
+                Material::Granite => crate::rbx::textures::GRANITE,
+                Material::Brick => crate::rbx::textures::BRICK,
+                Material::Pebble => crate::rbx::textures::PEBBLE,
+                Material::Sand => crate::rbx::textures::SAND,
+                Material::Fabric => crate::rbx::textures::FABRIC,
+                Material::SmoothPlastic => crate::rbx::textures::SMOOTHPLASTIC,
+                Material::Metal => crate::rbx::textures::METAL,
+                Material::WoodPlanks => crate::rbx::textures::WOODPLANKS,
+                Material::Cobblestone => crate::rbx::textures::COBBLESTONE,
+                Material::Glass => crate::rbx::textures::GLASS,
+                Material::ForceField => crate::rbx::textures::FORCEFIELD,
+                Material::Custom { texture: "decal", .. } => crate::rbx::textures::DECAL,
+                Material::Custom { texture: "studs", .. } => crate::rbx::textures::STUDS,
+                Material::Custom { texture: "inlet", .. } => crate::rbx::textures::INLET,
+                Material::Custom { texture: "spawnlocation", .. } => crate::rbx::textures::SPAWNLOCATION,
+                Material::Custom { .. } | Material::Decal { .. } | Material::Texture { .. } => return None,
+            }
+        )))
     }
 
     fn texture_output(&mut self, path: &str) -> OwnedOrMut<'_, File> {
