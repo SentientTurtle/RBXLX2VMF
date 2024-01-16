@@ -5,16 +5,11 @@ edition = "2021"
 publish = false
 
 [dependencies]
-clap = "2.33.3"
-roxmltree = "0.14.1"
-image = "0.23.14"
-reqwest = { version = "0.11.6", features = ["json"] }
-serde_json = "1.0.71"
-flate2 = "1.0.22"
+clap = { version = "4.4.16" }
+roxmltree = "0.19.0"
+image = "0.24.8"
+reqwest = { version = "0.11.23", features = ["json"] }
+serde_json = "1.0.111"
+flate2 = "1.0.28"
 async-std = { version = "1.12.0", features = ["tokio1"] }
-tokio = "=1.27.0" # async-std 1.12.0 wants a version of tokio that doesn't compile on more recent versions of rust
-log = "0.4.16" # To fix dependency issue in async-std
-
-# To be removed once async-traits are available
-js-sys = "0.3.57"
-web-sys = { version = "0.3.57", features = ["Window", "Response", "ReadableStream"] }
+tokio = "1.35.1"

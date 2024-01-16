@@ -1,12 +1,13 @@
 #![allow(non_snake_case)]
 #![feature(try_blocks)]
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, Metadata};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::ExitCode;
-use clap::{App, Arg};
+use clap::{Arg, ArgAction, Command};
+use clap::builder::OsStringValueParser;
 use crate::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
 use crate::rbx::Material;
 
@@ -15,102 +16,101 @@ mod vmf;
 mod conv;
 
 fn main() -> ExitCode {
-    let matches = App::new("RBXLX2VMF")
+    let matches = Command::new("RBXLX2VMF")
         .version("1.0")
         .about("Converts Roblox RBXLX files to Valve VMF files.")
-        .arg(Arg::with_name("input")
+        .arg(Arg::new("input")
             .long("input")
-            .short("i")
+            .short('i')
             .value_name("FILE")
             .help("Sets input file")
-            .takes_value(true)
-            .required(true))
-        .arg(Arg::with_name("output")
+            .required(true)
+            .num_args(1)
+            .value_parser(OsStringValueParser::new()))
+        .arg(Arg::new("output")
             .long("output")
-            .short("o")
+            .short('o')
             .value_name("FILE")
             .help("Sets output file")
             .default_value("rbxlx_out.vmf")
-            .takes_value(true))
-        .arg(Arg::with_name("texture-output")
+            .required(false)
+            .num_args(1)
+            .value_parser(OsStringValueParser::new()))
+        .arg(Arg::new("texture-output")
             .long("texture-output")
             .value_name("FOLDER")
             .help("Sets texture output folder")
             .default_value("./textures-out")
-            .takes_value(true))
-        .arg(Arg::with_name("no-textures")
+            .required(false)
+            .num_args(1)
+            .value_parser(OsStringValueParser::new()))
+        .arg(Arg::new("no-textures")
             .long("no-textures")
             .help("disables texture generation")
-            .takes_value(false))
-        .arg(Arg::with_name("dev-textures")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("dev-textures")
             .long("dev-textures")
             .help("use developer textures instead of roblox textures")
-            .takes_value(false))
-        .arg(Arg::with_name("auto-skybox")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("auto-skybox")
             .long("auto-skybox")
             .help("enables automatic skybox (Warning: Results in highly unoptimized map)")
-            .takes_value(false))
-        .arg(Arg::with_name("optimize")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("optimize")
             .long("optimize")
             .help("enables part-count reduction by joining adjacent parts")
-            .takes_value(false))
-        .arg(Arg::with_name("skybox-height")
+            .action(ArgAction::SetTrue))
+        .arg(Arg::new("skybox-height")
             .long("skybox-height")
             .help("sets additional auto-skybox height clearance")
-            .takes_value(true))
-        .arg(Arg::with_name("map-scale")
+            .value_parser(|input: &str| input.parse::<f64>())
+            .required(false)
+            .num_args(1))
+        .arg(Arg::new("map-scale")
             .long("map-scale")
             .help("sets map scale")
             .default_value("15")
-            .takes_value(true))
-        .arg(Arg::with_name("decal-size")
+            .value_parser(|input: &str| input.parse::<f64>())
+            .required(false)
+            .num_args(1))
+        .arg(Arg::new("decal-size")
             .long("decal-size")
             .help("sets downloaded decal texture size")
+            .value_parser(|input: &str| input.parse::<u64>())
+            .required(false)
             .default_value("256")
-            .takes_value(true))
-        .arg(Arg::with_name("game")
+            .num_args(1))
+        .arg(Arg::new("game")
             .long("game")
-            .short("g")
+            .short('g')
             .help("sets target source engine game")
             .required(true)
-            .takes_value(true)
-            .possible_values(&["css", "csgo", "gmod", "hl2", "hl2e1", "hl2e2", "hl", "hls", "l4d", "l4d2", "portal2", "portal", "tf2"])
+            .value_parser(["css", "csgo", "gmod", "hl2", "hl2e1", "hl2e2", "hl", "hls", "l4d", "l4d2", "portal2", "portal", "tf2"])
+            .num_args(1)
         )
         .get_matches();
 
     let exit_code = async_std::task::block_on(
         conv::convert(CLIConvertOptions {
-            input_name: matches.value_of("input").unwrap(),
-            input_path: matches.value_of_os("input").unwrap(),
-            output_path: matches.value_of_os("output").unwrap(),
+            input_name: &matches.get_one::<OsString>("input").unwrap().as_os_str().to_string_lossy(),
+            input_path: matches.get_one::<OsString>("input").unwrap(),
+            output_path: matches.get_one::<OsString>("output").unwrap(),
             texture_output_folder: {
-                let texture_folder = matches.value_of_os("texture-output").unwrap();
+                let texture_folder = matches.get_one::<OsString>("texture-output").unwrap();
                 if let Err(error) = std::fs::create_dir_all(Path::new(texture_folder).join("rbx")) {
                     println!("error: could not create texture output directory {}", error);
                     std::process::exit(-1)
                 }
                 texture_folder
             },
-            is_texture_output_enabled: !matches.is_present("no-textures"),
-            use_developer_textures: matches.is_present("dev-textures"),
-            map_scale: match matches.value_of("map-scale").unwrap().parse() {
-                Ok(f) => f,
-                Err(_) => {
-                    println!("error: invalid map scale");
-                    std::process::exit(-1)
-                }
-            },
-            auto_skybox_enabled: matches.is_present("auto-skybox"),
-            skybox_clearance: matches.value_of("skybox-height").map(str::parse).and_then(Result::ok).unwrap_or(0f64),
-            optimization_enabled: matches.is_present("optimize"),
-            decal_size: match matches.value_of("decal-size").unwrap().parse() {
-                Ok(size) => size,
-                Err(_) => {
-                    println!("error: invalid decal size");
-                    std::process::exit(-1)
-                }
-            },
-            skybox_name: match matches.value_of("game").unwrap() {
+            is_texture_output_enabled: !matches.get_one("no-textures").unwrap_or(&false),
+            use_developer_textures: *matches.get_one("dev-textures").unwrap_or(&false),
+            map_scale: *matches.get_one("map-scale").unwrap(),
+            auto_skybox_enabled: *matches.get_one("auto-skybox").unwrap_or(&false),
+            skybox_clearance: *matches.get_one("skybox-height").unwrap_or(&0f64),
+            optimization_enabled: *matches.get_one("optimize").unwrap_or(&false),
+            decal_size: *matches.get_one("decal-size").unwrap(),
+            skybox_name: match matches.get_one::<String>("game").unwrap().as_str() {
                 "css" => "sky_day01_05",
                 "csgo" => "sky_day02_05",
                 "gmod" => "painted",

@@ -78,8 +78,11 @@ pub async fn convert<R: Read, W: Write, O: ConvertOptions<R, W>>(mut options: O)
     let mut print_out = options.print_output();
     let mut error_out = options.error_output();
     writeln!(print_out, "Converting {}", options.input_name())?;
+    writeln!(print_out, "Texture output [{}]", if options.texture_output_enabled() { "ENABLED" } else { "DISABLED" })?;
+    writeln!(print_out, "Texture mode [{}]", if options.use_dev_textures() { "DEVELOPER" } else { "NORMAL" })?;
     writeln!(print_out, "Using map scale: {}×", options.map_scale())?;
     writeln!(print_out, "Auto-skybox [{}]", if options.auto_skybox_enabled() { "ENABLED" } else { "DISABLED" })?;
+    writeln!(print_out, "Skybox clearance: +{}", options.skybox_clearance())?;
     writeln!(print_out, "Part-count optimization [{}]", if options.optimization_enabled() { "ENABLED" } else { "DISABLED" })?;
     writeln!(print_out)?;
 
