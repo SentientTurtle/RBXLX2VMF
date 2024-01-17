@@ -10,17 +10,18 @@ Feel free to open issues/discussions for feature requests or other improvements.
 ### Recommended process
 
 1. Design or open Roblox map
-2. Add StringValue with name or value 'func_detail' to detail models (Note: Nested models are also marked detail)
+2. Add StringValue with name or value 'func_detail' to detail models, or set the name of the model itself to 'func_detail' (Note: Nested models are also marked detail)  
+   (This step may also be done after conversion, in hammer)
 3. Save map in XML (*.xbxlx) format
 4. Run conversion tool
-5. Convert the generated texture PNGs to Valve VTF format.
-6. Move VTF and VMT texture files to game material folder
+5. Move VTF and VMT texture files to game material folder (E.g. 'Map.zip/rbx' -> 'Team Fortress 2\tf\materials\rbx')
+6. Open VMF File in hammer or hammer++
 
 **What you get:**
 
 * Part geometry converted to brushes.
-* Basic support for func_detail and compiling before the heat-death of the universe
-* Textures (VMT + PNG)
+* Basic support for func_detail
+* Textures (VMT + VTF)
 * (Optional) Basic optimization by joining adjacent parts
 * (Optional) bounding box skybox
 
