@@ -12,7 +12,7 @@ Feel free to open issues/discussions for feature requests or other improvements.
 1. Design or open Roblox map
 2. Add StringValue with name or value 'func_detail' to detail models, or set the name of the model itself to 'func_detail' (Note: Nested models are also marked detail)  
    (This step may also be done after conversion, in hammer)
-3. Save map in XML (*.xbxlx) format
+3. Save map in XML (*.rbxlx) format
 4. Run conversion tool
 5. Move VTF and VMT texture files to game material folder (E.g. 'Map.zip/rbx' -> 'Team Fortress 2\tf\materials\rbx')
 6. Open VMF File in hammer or hammer++
