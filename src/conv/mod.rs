@@ -59,7 +59,6 @@ pub trait ConvertOptions<W: Write> {
     fn read_input_data<'a>(&'a self) -> OwnedOrRef<'a, String>;
 
     fn vmf_output<'a>(&'a mut self) -> OwnedOrMut<'a, W>;
-    async fn texture_input(&mut self, texture: Material) -> Option<Result<Vec<u8>, String>>;
     fn texture_output<'a>(&'a mut self, path: &str) -> OwnedOrMut<'a, W>;
     fn texture_output_enabled(&self) -> bool;
     fn use_dev_textures(&self) -> bool;
@@ -251,26 +250,19 @@ pub async fn convert<W: Write, O: ConvertOptions<W>>(mut options: O) -> Result<u
 
                     write!(print_out, "Copying textures...\n")?;
                     print_out.flush().unwrap_or_default();
-                    for texture in textures_to_copy {
-                        write!(print_out, "\t{}...", texture)?;
+                    for material in textures_to_copy {
+                        write!(print_out, "\t{}...", material)?;
                         print_out.flush().unwrap_or_default();
 
-                        let input = options.texture_input(texture).await;
-                        if let Some(read_result) = input {
-                            match read_result {
-                                Ok(data) => {
-                                    let texture_path = format!("rbx/{}.png", texture);
-                                    let mut temp = options.texture_output(&*texture_path);
-                                    let file = temp.as_mut();
-                                    if let Err(error) = file.write_all(&*data) {
-                                        writeln!(error_out, "\t\twarning: could not copy texture file {}: {}", texture, error)?;
-                                        error_out.flush()?;
-                                    } else {
-                                        writeln!(print_out, " COPIED")?;
-                                    }
-                                },
-                                Err(message) => {
-                                    writeln!(error_out, "\t\t{}", message)?;
+                        if let Some(data) = material.texture() {
+                            let texture_path = format!("rbx/{}.vtf", material);
+                            let mut temp = options.texture_output(&*texture_path);
+                            let file = temp.as_mut();
+
+                            match file.write_all(&*data) {
+                                Ok(()) => writeln!(print_out, " COPIED")?,
+                                Err(error) => {
+                                    writeln!(error_out, "\t\t could not copy texture file {}: {}", material, error)?;
                                     error_out.flush()?;
                                 }
                             }

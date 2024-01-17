@@ -6,31 +6,31 @@ use std::ops::{Add, Sub, Mul, Div, AddAssign, SubAssign};
 
 #[allow(unused)]    // Only used on CLI
 pub mod textures {
-    pub const ALUMINIUM: &'static [u8] = include_bytes!("../textures/aluminium.png");
-    pub const BRICK: &'static [u8] = include_bytes!("../textures/brick.png");
-    pub const COBBLESTONE: &'static [u8] = include_bytes!("../textures/cobblestone.png");
-    pub const CONCRETE: &'static [u8] = include_bytes!("../textures/concrete.png");
-    pub const DECAL: &'static [u8] = include_bytes!("../textures/decal.png");
-    pub const DIAMONDPLATE: &'static [u8] = include_bytes!("../textures/diamondplate.png");
-    pub const FABRIC: &'static [u8] = include_bytes!("../textures/fabric.png");
-    pub const FORCEFIELD: &'static [u8] = include_bytes!("../textures/forcefield.png");
-    pub const GLASS: &'static [u8] = include_bytes!("../textures/glass.png");
-    pub const GRANITE: &'static [u8] = include_bytes!("../textures/granite.png");
-    pub const GRASS: &'static [u8] = include_bytes!("../textures/grass.png");
-    pub const ICE: &'static [u8] = include_bytes!("../textures/ice.png");
-    pub const INLET: &'static [u8] = include_bytes!("../textures/inlet.png");
-    pub const MARBLE: &'static [u8] = include_bytes!("../textures/marble.png");
-    pub const METAL: &'static [u8] = include_bytes!("../textures/metal.png");
-    pub const PEBBLE: &'static [u8] = include_bytes!("../textures/pebble.png");
-    pub const PLASTIC: &'static [u8] = include_bytes!("../textures/plastic.png");
-    pub const RUST: &'static [u8] = include_bytes!("../textures/rust.png");
-    pub const SAND: &'static [u8] = include_bytes!("../textures/sand.png");
-    pub const SLATE: &'static [u8] = include_bytes!("../textures/slate.png");
-    pub const SMOOTHPLASTIC: &'static [u8] = include_bytes!("../textures/smoothplastic.png");
-    pub const SPAWNLOCATION: &'static [u8] = include_bytes!("../textures/spawnlocation.png");
-    pub const STUDS: &'static [u8] = include_bytes!("../textures/studs.png");
-    pub const WOOD: &'static [u8] = include_bytes!("../textures/wood.png");
-    pub const WOODPLANKS: &'static [u8] = include_bytes!("../textures/woodplanks.png");
+    pub const ALUMINIUM: &'static [u8] = include_bytes!("../textures/aluminium.vtf");
+    pub const BRICK: &'static [u8] = include_bytes!("../textures/brick.vtf");
+    pub const COBBLESTONE: &'static [u8] = include_bytes!("../textures/cobblestone.vtf");
+    pub const CONCRETE: &'static [u8] = include_bytes!("../textures/concrete.vtf");
+    pub const DECAL: &'static [u8] = include_bytes!("../textures/decal.vtf");
+    pub const DIAMONDPLATE: &'static [u8] = include_bytes!("../textures/diamondplate.vtf");
+    pub const FABRIC: &'static [u8] = include_bytes!("../textures/fabric.vtf");
+    pub const FORCEFIELD: &'static [u8] = include_bytes!("../textures/forcefield.vtf");
+    pub const GLASS: &'static [u8] = include_bytes!("../textures/glass.vtf");
+    pub const GRANITE: &'static [u8] = include_bytes!("../textures/granite.vtf");
+    pub const GRASS: &'static [u8] = include_bytes!("../textures/grass.vtf");
+    pub const ICE: &'static [u8] = include_bytes!("../textures/ice.vtf");
+    pub const INLET: &'static [u8] = include_bytes!("../textures/inlet.vtf");
+    pub const MARBLE: &'static [u8] = include_bytes!("../textures/marble.vtf");
+    pub const METAL: &'static [u8] = include_bytes!("../textures/metal.vtf");
+    pub const PEBBLE: &'static [u8] = include_bytes!("../textures/pebble.vtf");
+    pub const PLASTIC: &'static [u8] = include_bytes!("../textures/plastic.vtf");
+    pub const RUST: &'static [u8] = include_bytes!("../textures/rust.vtf");
+    pub const SAND: &'static [u8] = include_bytes!("../textures/sand.vtf");
+    pub const SLATE: &'static [u8] = include_bytes!("../textures/slate.vtf");
+    pub const SMOOTHPLASTIC: &'static [u8] = include_bytes!("../textures/smoothplastic.vtf");
+    pub const SPAWNLOCATION: &'static [u8] = include_bytes!("../textures/spawnlocation.vtf");
+    pub const STUDS: &'static [u8] = include_bytes!("../textures/studs.vtf");
+    pub const WOOD: &'static [u8] = include_bytes!("../textures/wood.vtf");
+    pub const WOODPLANKS: &'static [u8] = include_bytes!("../textures/woodplanks.vtf");
 }
 
 /// Struct to represent Roblox Models
@@ -330,6 +330,39 @@ pub enum Material {
         size_x: u64,
         size_y: u64,
     },
+}
+
+impl Material {
+    pub fn texture(self) -> Option<&'static [u8]> {
+        Some(match self {
+            Material::Plastic => crate::rbx::textures::PLASTIC,
+            Material::Wood => crate::rbx::textures::WOOD,
+            Material::Slate => crate::rbx::textures::SLATE,
+            Material::Concrete => crate::rbx::textures::CONCRETE,
+            Material::CorrodedMetal => crate::rbx::textures::RUST,
+            Material::DiamondPlate => crate::rbx::textures::DIAMONDPLATE,
+            Material::Foil => crate::rbx::textures::ALUMINIUM,
+            Material::Grass => crate::rbx::textures::GRASS,
+            Material::Ice => crate::rbx::textures::ICE,
+            Material::Marble => crate::rbx::textures::MARBLE,
+            Material::Granite => crate::rbx::textures::GRANITE,
+            Material::Brick => crate::rbx::textures::BRICK,
+            Material::Pebble => crate::rbx::textures::PEBBLE,
+            Material::Sand => crate::rbx::textures::SAND,
+            Material::Fabric => crate::rbx::textures::FABRIC,
+            Material::SmoothPlastic => crate::rbx::textures::SMOOTHPLASTIC,
+            Material::Metal => crate::rbx::textures::METAL,
+            Material::WoodPlanks => crate::rbx::textures::WOODPLANKS,
+            Material::Cobblestone => crate::rbx::textures::COBBLESTONE,
+            Material::Glass => crate::rbx::textures::GLASS,
+            Material::ForceField => crate::rbx::textures::FORCEFIELD,
+            Material::Custom { texture: "decal", .. } => crate::rbx::textures::DECAL,
+            Material::Custom { texture: "studs", .. } => crate::rbx::textures::STUDS,
+            Material::Custom { texture: "inlet", .. } => crate::rbx::textures::INLET,
+            Material::Custom { texture: "spawnlocation", .. } => crate::rbx::textures::SPAWNLOCATION,
+            Material::Custom { .. } | Material::Decal { .. } | Material::Texture { .. } => return None,
+        })
+    }
 }
 
 

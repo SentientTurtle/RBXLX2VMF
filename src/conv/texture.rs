@@ -1,5 +1,3 @@
-extern crate reqwest;
-
 use crate::rbx::{Color3, Vector3, Material};
 use crate::vmf::{Side, TextureFace, VMFTexture};
 

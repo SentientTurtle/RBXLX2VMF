@@ -11,7 +11,6 @@ use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipWriter};
 use rbxlx2vmf::conv;
 use rbxlx2vmf::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
-use rbxlx2vmf::rbx::Material;
 
 // Use `wee_alloc` as the global allocator
 #[global_allocator]
@@ -109,26 +108,6 @@ impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions
         OwnedOrMut::Ref(&mut self.zip_writer)
     }
 
-    async fn texture_input(&mut self, texture: Material) -> Option<Result<Vec<u8>, String>> {
-        let path = format!("{}/textures/{}.png", self.web_origin(), texture);
-        let http_client = reqwest::Client::new();
-
-        match http_client.get(path).send().await {
-            Ok(response) => {
-                if response.status().is_success() {
-                    match response.bytes().await {
-                        Ok(bytes) => Some(Ok(bytes.to_vec())),
-                        Err(error) => Some(Err(format!(" FAILED ({})", error))),
-                    }
-                } else {
-                    // TODO: Maybe return None and skip texture generation for HTTP 404?
-                    Some(Err(format!(" FAILED (HTTP {})", response.status())))
-                }
-            }
-            Err(error) => Some(Err(format!(" FAILED ({})", error)))
-        }
-    }
-
     fn texture_output(&mut self, path: &str) -> OwnedOrMut<'_, ZipWriter<Cursor<&'a mut Vec<u8>>>> {
         // We copy out of clientside browser RAM, so there is no need to compress
         self.zip_writer.start_file(path, FileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
@@ -138,7 +117,7 @@ impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions
     fn texture_output_enabled(&self) -> bool {
         self.is_texture_output_enabled
     }
-    
+
     fn use_dev_textures(&self) -> bool {
         self.use_developer_textures
     }
