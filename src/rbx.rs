@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::cmp::Ordering;
+use std::collections::{HashMap};
 use std::fmt::{Display, Formatter};
 use std::io::Write;
 use std::ops::{Add, Sub, Mul, Div, AddAssign, SubAssign};
@@ -110,6 +111,7 @@ pub struct Part<'a> {
     pub decals: [Option<Material>; 6],   // 0 = Front =-Z, 1 = Back = +Z, 2 = Top = +Y, 3 Bottom = -Y, 4 Right = +X, 5 = Left = -X
 }
 
+/// Struct to represent visual identity of a part
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct PartVisualHash {
     pub is_detail: bool,
@@ -177,7 +179,6 @@ impl<'a> Part<'a> {
         }
     }
 
-    // TODO: Performance can be increased through splitting the parts list into "chunks" of 3D space as to further cull comparisons
     pub fn join_adjacent<P: Write + ?Sized>(parts: Vec<Part<'a>>, print_progress: bool, print_target: &mut P) -> Vec<Part<'a>> {
         let mut map = HashMap::new();
         let mut unique_parts = Vec::new();
@@ -199,7 +200,9 @@ impl<'a> Part<'a> {
             }
             let mut progress_printed = 0;
             let mut parts_visited = 0;
-            'join_loop: loop {
+
+            let mut i = 0;
+            'join_loop: while i < parts.len() {
                 if print_progress {
                     let progress = (parts_visited * 50) / parts.len();
                     for _ in progress_printed..progress {
@@ -209,50 +212,59 @@ impl<'a> Part<'a> {
                     print_target.flush().unwrap_or_default();
                 }
 
-                for i in 0..parts.len() {
-                    for j in (i + 1)..parts.len() {
-                        if i != j {
-                            // This is safe as i and j are not equal and thus cannot point to the same element
-                            let (part_1, part_2) = {
-                                if i > j {
-                                    let (front, back) = parts.split_at_mut(i);
-                                    (&mut back[0], &mut front[j])
-                                } else {
-                                    let (front, back) = parts.split_at_mut(j);
-                                    (&mut front[i], &mut back[0])
-                                }
-                            };
+                for j in 0..parts.len() {
+                    if i == j { break; }
 
-                            for side_1 in part_1.sides() {
-                                for mut side_2 in part_2.sides() {
-                                    side_2.rotate_right(2);
-                                    if side_1 == side_2 {
-                                        let side_1_direction = (Vector3::centroid(side_1) / part_1.cframe).closest_axis();
-                                        let side_2_direction = (Vector3::centroid(side_2) / part_2.cframe).closest_axis();
+                    let (part_1, part_2) = {
+                        if i > j {
+                            let (front, back) = parts.split_at_mut(i);
+                            (&mut back[0], &mut front[j])
+                        } else {
+                            let (front, back) = parts.split_at_mut(j);
+                            (&mut front[i], &mut back[0])
+                        }
+                    };
 
-                                        let change_magnitude = (side_1_direction * part_1.size).magnitude();    // Magnitude implicitly performs `abs()`
-                                        let size_change = side_2_direction.abs() * change_magnitude;
+                    for mut side_1 in part_1.sides() {
+                        let centroid_1 = Vector3::centroid(side_1);
+                        for mut side_2 in part_2.sides() {
+                            let centroid_2 = Vector3::centroid(side_2);
 
-                                        part_2.size += size_change;
+                            if centroid_1 == centroid_2 {
+                                // The order of points in the side/face array is fixed to the part's local (before rotation) space, but we need to compare them in global space.
+                                // We sort them to ensure each side has the same order so they can be compared
+                                side_1.sort_unstable_by(Vector3::order);
+                                side_2.sort_unstable_by(Vector3::order);
 
-                                        let position_vector = Vector3::centroid(side_2) - part_2.cframe.position;
-                                        part_2.cframe.position += (position_vector / position_vector.magnitude()) * (change_magnitude / 2.0);
+                                if side_1 == side_2 {
+                                    let side_1_direction = (Vector3::centroid(side_1) / part_1.cframe).closest_axis();
+                                    let side_2_direction = (Vector3::centroid(side_2) / part_2.cframe).closest_axis();
 
-                                        let last_index = parts.len() - 1;
-                                        if i != last_index {
-                                            parts.swap(i, last_index);
-                                        }
-                                        parts.truncate(last_index);
+                                    let change_magnitude = (side_2_direction * part_2.size).magnitude();    // Magnitude implicitly performs `abs()`
+                                    let size_change = side_1_direction.abs() * change_magnitude;
 
-                                        parts_visited = i;
-                                        continue 'join_loop;
+                                    part_1.size += size_change;
+
+                                    let position_vector = Vector3::centroid(side_1) - part_1.cframe.position;
+                                    part_1.cframe.position += (position_vector / position_vector.magnitude()) * (change_magnitude / 2.0);
+
+                                    let last_index = parts.len() - 1;
+                                    if j != last_index {
+                                        parts.swap(j, last_index);
                                     }
+                                    parts.truncate(last_index);
+
+                                    parts_visited = i.max(parts_visited).min(parts.len());
+                                    if j < i {
+                                        i = j;
+                                    }
+                                    continue 'join_loop;
                                 }
                             }
                         }
                     }
                 }
-                break;
+                i += 1;
             }
 
             if print_progress {
@@ -574,6 +586,27 @@ impl Vector3 {
             sum = sum + vertex;
         }
         sum / (N as f64)
+    }
+
+    /// Provides a (meaningless) ordering between two Vector3s
+    pub fn order(left: &Self, right: &Self) -> Ordering {
+        match left.x.partial_cmp(&right.x) {
+            Some(Ordering::Greater) => Ordering::Greater,
+            Some(Ordering::Less) => Ordering::Less,
+            Some(Ordering::Equal) | None => {
+                match left.y.partial_cmp(&right.y) {
+                    Some(Ordering::Greater) => Ordering::Greater,
+                    Some(Ordering::Less) => Ordering::Less,
+                    Some(Ordering::Equal) | None => {
+                        match left.z.partial_cmp(&right.z) {
+                            Some(Ordering::Greater) => Ordering::Greater,
+                            Some(Ordering::Less) => Ordering::Less,
+                            Some(Ordering::Equal) | None => Ordering::Equal
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

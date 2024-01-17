@@ -8,7 +8,7 @@ use std::io::{Cursor, IoSlice, Write};
 use js_sys::Uint8Array;
 use wasm_bindgen::prelude::*;
 use zip::write::FileOptions;
-use zip::ZipWriter;
+use zip::{CompressionMethod, ZipWriter};
 use rbxlx2vmf::conv;
 use rbxlx2vmf::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
 use rbxlx2vmf::rbx::Material;
@@ -104,7 +104,8 @@ impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions
     }
 
     fn vmf_output(&mut self) -> OwnedOrMut<'_, ZipWriter<Cursor<&'a mut Vec<u8>>>> {
-        self.zip_writer.start_file("map.vmf", FileOptions::default()).unwrap();
+        // We copy out of clientside browser RAM, so there is no need to compress
+        self.zip_writer.start_file("map.vmf", FileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
         OwnedOrMut::Ref(&mut self.zip_writer)
     }
 
@@ -129,13 +130,15 @@ impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions
     }
 
     fn texture_output(&mut self, path: &str) -> OwnedOrMut<'_, ZipWriter<Cursor<&'a mut Vec<u8>>>> {
-        self.zip_writer.start_file(path, FileOptions::default()).unwrap();
+        // We copy out of clientside browser RAM, so there is no need to compress
+        self.zip_writer.start_file(path, FileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
         OwnedOrMut::Ref(&mut self.zip_writer)
     }
 
     fn texture_output_enabled(&self) -> bool {
         self.is_texture_output_enabled
     }
+    
     fn use_dev_textures(&self) -> bool {
         self.use_developer_textures
     }

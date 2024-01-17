@@ -209,7 +209,7 @@ pub async fn convert<W: Write, O: ConvertOptions<W>>(mut options: O) -> Result<u
                         if let Material::Decal { id, .. } | Material::Texture { id, .. } = texture.material {
                             writeln!(print_out, "\tdecal: {} UNSUPPORTED", id)?;
                         } else {
-                            write!(print_out, "\tmaterial: {}...", texture.name())?;
+                            write!(print_out, "\t{}...", texture.name())?;
                             print_out.flush().unwrap_or_default();
 
                             if !(textures_to_copy.contains(&texture.material)) {
@@ -252,7 +252,7 @@ pub async fn convert<W: Write, O: ConvertOptions<W>>(mut options: O) -> Result<u
                     write!(print_out, "Copying textures...\n")?;
                     print_out.flush().unwrap_or_default();
                     for texture in textures_to_copy {
-                        write!(print_out, "\ttexture: {}...", texture)?;
+                        write!(print_out, "\t{}...", texture)?;
                         print_out.flush().unwrap_or_default();
 
                         let input = options.texture_input(texture).await;
