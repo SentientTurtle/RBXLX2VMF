@@ -10,15 +10,15 @@ crate-type = ["cdylib"]
 [dependencies]
 rbxlx2vmf = { path = "../." }
 wee_alloc = { version = "0.4.5" }
-wasm-bindgen = "0.2.90"
-wasm-bindgen-futures = "0.4.40"
-js-sys = "0.3.67"
-web-sys = { version = "0.3.67", features = [
+wasm-bindgen = "0.2.100"
+wasm-bindgen-futures = "0.4.50"
+js-sys = "0.3.77"
+web-sys = { version = "0.3.77", features = [
     "Window",
     "Response",
     "ReadableStream"
 ] }
-zip = { version = "0.6.6", default-features = false }
+zip = { version = "4.0.0", default-features = false }
 
 [profile.release]
 opt-level = "s"

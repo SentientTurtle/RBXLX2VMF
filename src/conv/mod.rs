@@ -50,7 +50,6 @@ impl<'a, T> OwnedOrMut<'a, T> {
 }
 
 // This trait is "pub" as the wasm-specific code is in a separate crate, we do not have a public API
-#[allow(async_fn_in_trait)]
 pub trait ConvertOptions<W: Write> {
     fn print_output(&self) -> Box<dyn Write>;
     fn error_output(&self) -> Box<dyn Write>;
@@ -70,10 +69,11 @@ pub trait ConvertOptions<W: Write> {
 
     fn decal_size(&self) -> u64;
     fn skybox_name(&self) -> &str;
-
-    fn web_origin(&self) -> &str;
 }
 
+/// Convert 3D Geometry with given options
+///
+/// returns: Result<u8, Error> Ok containing CLI Exit code (0 success, 1 error) or IO error if logging fails
 pub async fn convert<W: Write, O: ConvertOptions<W>>(mut options: O) -> Result<u8, std::io::Error> {
     let mut print_out = options.print_output();
     let mut error_out = options.error_output();
@@ -107,12 +107,27 @@ pub async fn convert<W: Write, O: ConvertOptions<W>>(mut options: O) -> Result<u
                 .copied()
                 .fold(bounding_box, BoundingBox::include);
 
-            let map_size = bounding_box.size() * options.map_scale();
-            if (map_size.x > MAX_MAP_SIZE) || (map_size.x > MAX_MAP_SIZE) || (map_size.x > MAX_MAP_SIZE) {
+            let map_size = if options.auto_skybox_enabled() {
+                (bounding_box.size() + Vector3::from_array([2.0, 2.0, 2.0])) * options.map_scale()    // Add auto-skybox size to map bounding box
+            } else {
+                bounding_box.size() * options.map_scale()
+            };
+            if (map_size.x >= MAX_MAP_SIZE) || (map_size.x >= MAX_MAP_SIZE) || (map_size.x >= MAX_MAP_SIZE) {
+                let rbx_map_size = if options.auto_skybox_enabled() {
+                    (MAX_MAP_SIZE / options.map_scale()) - 2.0
+                } else {
+                    MAX_MAP_SIZE / options.map_scale()
+                };
+
+                let largest_size = f64::max(map_size.x, map_size.y).max(map_size.z);
+                let max_scale_factor = options.map_scale() * (MAX_MAP_SIZE / largest_size);
+                
                 writeln!(error_out)?;
                 writeln!(error_out, "WARNING: Map exceeds source engine size limitations, and will not compile!")?;
                 writeln!(error_out, "Map size            X: {:6.0}hu Y: {:6.0}hu Z: {:6.0}hu", map_size.x, map_size.y, map_size.z)?;
                 writeln!(error_out, "Engine limits       X: {:6.0}hu Y: {:6.0}hu Z: {:6.0}hu", MAX_MAP_SIZE, MAX_MAP_SIZE, MAX_MAP_SIZE)?;
+                writeln!(error_out, "Map should be less than {} by {} by {} roblox units when using {}× scale", rbx_map_size, rbx_map_size, rbx_map_size, options.map_scale())?;
+                writeln!(error_out, "Map will fit with a scale factor of {:.2}×", max_scale_factor)?;
                 writeln!(error_out)?;
                 error_out.flush()?;
             } else {
@@ -298,6 +313,16 @@ fn to_source_coordinates(vector: Vector3) -> [f64; 3] {
 
 /// Decomposes a Roblox part into it's polyhedron faces, and returns them as source engine Sides
 fn decompose_part(part: Part, id: &mut u32, map_scale: f64, use_dev_textures: bool, texture_map: &mut TextureMap<RobloxTexture>) -> Vec<Side> {
+    // Source engine does not support extremely thin brushes, deleting the small faces leading to geometry errors.
+    // Parts are given a minimum size as a workaround.
+
+    let minimum_size = (0.3) / map_scale;   // Estimated value, confirmed via testing.
+    let mut part = part;
+    part.size.x = part.size.x.max(minimum_size);
+    part.size.y = part.size.y.max(minimum_size);
+    part.size.z = part.size.z.max(minimum_size);
+    let part = part;
+
     let vertices = part.vertices();
 
     const DECAL_FRONT: usize = 5;

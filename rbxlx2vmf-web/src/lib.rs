@@ -12,7 +12,7 @@ use zip::{CompressionMethod, ZipWriter};
 use rbxlx2vmf::conv;
 use rbxlx2vmf::conv::{ConvertOptions, OwnedOrMut, OwnedOrRef};
 
-// Use `wee_alloc` as the global allocator
+// Use `wee_alloc` as the global allocator for WASM
 #[global_allocator]
 static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 
@@ -82,8 +82,7 @@ struct JSConvertOptions<'a> {
     skybox_clearance: f64,
     optimization_enabled: bool,
     decal_size: u64,
-    skybox_name: &'a str,
-    web_origin: &'a str
+    skybox_name: &'a str
 }
 
 impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions<'a> {
@@ -104,13 +103,13 @@ impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions
 
     fn vmf_output(&mut self) -> OwnedOrMut<'_, ZipWriter<Cursor<&'a mut Vec<u8>>>> {
         // We copy out of clientside browser RAM, so there is no need to compress
-        self.zip_writer.start_file("map.vmf", FileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
+        self.zip_writer.start_file::<_, ()>("map.vmf", FileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
         OwnedOrMut::Ref(&mut self.zip_writer)
     }
 
     fn texture_output(&mut self, path: &str) -> OwnedOrMut<'_, ZipWriter<Cursor<&'a mut Vec<u8>>>> {
         // We copy out of clientside browser RAM, so there is no need to compress
-        self.zip_writer.start_file(path, FileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
+        self.zip_writer.start_file::<_, ()>(path, FileOptions::default().compression_method(CompressionMethod::Stored)).unwrap();
         OwnedOrMut::Ref(&mut self.zip_writer)
     }
 
@@ -145,10 +144,6 @@ impl<'a> ConvertOptions<ZipWriter<Cursor<&'a mut Vec<u8>>>> for JSConvertOptions
     fn skybox_name(&self) -> &str {
         self.skybox_name
     }
-
-    fn web_origin(&self) -> &str {
-        self.web_origin
-    }
 }
 
 #[wasm_bindgen]
@@ -161,8 +156,7 @@ pub async fn convert_map(
     auto_skybox_enabled: bool,
     skybox_clearance: f64,
     optimization_enabled: bool,
-    skyname: String,
-    web_origin: String
+    skyname: String
 ) -> Result<Uint8Array, JsValue> {
     let mut zip_buffer = Vec::new();
     let zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_buffer));
@@ -195,8 +189,7 @@ pub async fn convert_map(
             "portal" => "sky_day01_05_hdr",
             "tf2" => "sky_day01_01",
             _ => "default_skybox_fixme" // The only guard against invalid values here is HTML form validation, but as we're a clientside application, just substitute in a placeholder value
-        },
-        web_origin: &web_origin
+        }
     }).await;
     match result {
         Ok(0) => {

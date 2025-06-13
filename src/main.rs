@@ -123,12 +123,12 @@ fn main() -> ExitCode {
                 "portal2" => "sky_day01_01",
                 "portal" => "sky_day01_05_hdr",
                 "tf2" => "sky_day01_01",
-                _ => "default_skybox_fixme" // The only guard against invalid values here is HTML form validation, but as we're a clientside application, just substitute in a placeholder value
+                _ => "default_skybox_fixme"
             }
         })
     );
 
-    return match exit_code {
+    match exit_code {
         Ok(code) => ExitCode::from(code),
         // Error writing to STDIO
         Err(error) => {
@@ -235,9 +235,5 @@ impl<'a> ConvertOptions<File> for CLIConvertOptions<'a> {
 
     fn skybox_name(&self) -> &str {
         self.skybox_name
-    }
-
-    fn web_origin(&self) -> &str {
-        ""  // Unused in CLI version; TODO: Remove when async-trait functions are available.
     }
 }
